@@ -36,9 +36,13 @@ router.post(
         if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
           const fs = require('fs');
           const path = require('path');
-          const saPath = path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-          const saJson = JSON.parse(fs.readFileSync(saPath, 'utf8'));
-          credential = admin.credential.cert(saJson);
+          try {
+            const saPath = path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+            const saJson = JSON.parse(fs.readFileSync(saPath, 'utf8'));
+            credential = admin.credential.cert(saJson);
+          } catch (fileErr) {
+            throw new Error('Failed to load Firebase service account credentials');
+          }
         } else {
           credential = admin.credential.applicationDefault();
         }

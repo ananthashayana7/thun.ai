@@ -105,7 +105,7 @@ EngineOutput IVISEngine::tick(
     const auto t_end = std::chrono::steady_clock::now();
     const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
     if (elapsed_us > 45'000) { // 45 ms warning threshold (target < 50 ms)
-        std::cerr << "[IVISEngine] WARNING: tick latency " << elapsed_us << " µs\n";
+        std::cerr << "[IVISEngine] WARNING: tick latency " << elapsed_us << " us\n";
     }
 
     if (output_cb_) {

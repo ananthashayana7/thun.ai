@@ -95,16 +95,15 @@ class OBDService {
     await this._device.write(`${pid}\r`);
     // Read response with timeout; unsubscribe listener to prevent memory leak
     return new Promise((resolve, reject) => {
-      let subscription = null;
-      const timeout = setTimeout(() => {
-        if (subscription) subscription.remove();
-        reject(new Error('PID timeout'));
-      }, 500);
-      subscription = this._device.onDataReceived(({ data }) => {
+      let subscription = this._device.onDataReceived(({ data }) => {
         clearTimeout(timeout);
         subscription.remove();
         resolve(data.trim());
       });
+      const timeout = setTimeout(() => {
+        subscription.remove();
+        reject(new Error('PID timeout'));
+      }, 500);
     });
   }
 

@@ -34,6 +34,7 @@ class WatchService {
       BleManager.startDeviceScan([HR_SERVICE_UUID], null, (error, device) => {
         if (error) {
           clearTimeout(timer);
+          BleManager.stopDeviceScan();
           reject(error);
           return;
         }

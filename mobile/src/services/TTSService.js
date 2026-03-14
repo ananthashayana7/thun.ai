@@ -7,6 +7,9 @@
  */
 import axios from 'axios';
 import Tts from 'react-native-tts';
+import Sound from 'react-native-sound';
+import { Platform } from 'react-native';
+import RNFS from 'react-native-fs';
 import { SPEED_GATE_KMH } from '../utils/constants';
 
 const SARVAM_URL = process.env.SARVAM_API_URL || 'https://api.sarvam.ai/text-to-speech';
@@ -118,9 +121,25 @@ class TTSService {
     const audioBase64 = response.data?.audios?.[0];
     if (!audioBase64) throw new Error('No audio in Sarvam response');
 
-    // Play base64 audio using react-native-sound or similar
-    // For now, fall through to native TTS as audio playback requires additional setup
-    this._speakNative(text, lang);
+    // Write base64 PCM/WAV audio to a temp file and play via react-native-sound
+    const tmpPath = `${RNFS.CachesDirectoryPath}/thunai_tts_${Date.now()}.wav`;
+    await RNFS.writeFile(tmpPath, audioBase64, 'base64');
+    await new Promise((resolve, reject) => {
+      Sound.setCategory('Playback');
+      const sound = new Sound(tmpPath, '', (loadErr) => {
+        if (loadErr) {
+          RNFS.unlink(tmpPath).catch(() => {});
+          reject(loadErr);
+          return;
+        }
+        sound.play((success) => {
+          sound.release();
+          RNFS.unlink(tmpPath).catch(() => {});
+          if (success) resolve();
+          else reject(new Error('Audio playback failed'));
+        });
+      });
+    });
   }
 
   _speakNative(text, lang) {

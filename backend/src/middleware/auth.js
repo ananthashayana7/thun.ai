@@ -17,10 +17,13 @@ function getFirebaseApp() {
   if (!firebaseApp) {
     let credential;
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-      // Read and parse the service account file; do not use dynamic require()
-      const saPath = path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-      const saJson = JSON.parse(fs.readFileSync(saPath, 'utf8'));
-      credential = admin.credential.cert(saJson);
+      try {
+        const saPath = path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+        const saJson = JSON.parse(fs.readFileSync(saPath, 'utf8'));
+        credential = admin.credential.cert(saJson);
+      } catch (err) {
+        throw new Error('Failed to load Firebase service account credentials');
+      }
     } else {
       credential = admin.credential.applicationDefault();
     }
