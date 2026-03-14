@@ -1,0 +1,30 @@
+{
+  "name": "thun-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "thun.ai – AI-powered In-Vehicle Intelligence System (IVIS)",
+  "workspaces": [
+    "mobile",
+    "backend"
+  ],
+  "scripts": {
+    "mobile": "yarn workspace mobile start",
+    "backend": "yarn workspace backend dev",
+    "backend:prod": "yarn workspace backend start",
+    "lint": "yarn workspaces run lint",
+    "test": "yarn workspaces run test"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "yarn": ">=1.22.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5"
+  },
+  "prettier": {
+    "singleQuote": true,
+    "trailingComma": "es5",
+    "printWidth": 100,
+    "semi": true
+  }
+}

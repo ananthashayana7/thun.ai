@@ -1,0 +1,7 @@
+{
+  "name": "ThunAI",
+  "displayName": "thun.ai",
+  "version": "1.0.0",
+  "bundleIdentifier": "ai.thun.app",
+  "androidPackage": "ai.thun.app"
+}
