@@ -1,0 +1,145 @@
+# thun.ai default configuration
+# Override any value via environment variable: THUNAI_<SECTION>_<KEY>
+# e.g. THUNAI_LLM_PROVIDER=gemini
+
+app:
+  name: thun.ai
+  version: "0.1.0"
+  log_level: INFO          # DEBUG | INFO | WARNING | ERROR
+  speed_silence_threshold_kmh: 80  # Voice model goes quiet above this speed
+
+# ───────────────────────────────────────────────
+# Intelligence providers
+# ───────────────────────────────────────────────
+llm:
+  # Cloud LLM used for post-drive feedback & synthetic data generation
+  # Options: gemini | openai | stub
+  provider: gemini
+  gemini:
+    model: gemini-1.5-flash
+    pro_model: gemini-1.5-pro          # Used for AI Therapist (higher quality)
+    api_key_env: GEMINI_API_KEY        # Name of the env-var that holds the key
+    max_output_tokens: 2048
+    temperature: 0.4
+  openai:
+    model: gpt-4o-mini
+    api_key_env: OPENAI_API_KEY
+    max_output_tokens: 2048
+    temperature: 0.4
+  stub:
+    # Deterministic responses for local development / testing without API keys
+    enabled: true
+
+slm:
+  # On-device Small Language Model for real-time intervention (zero-latency)
+  # Options: ollama | phi3 | mistral | stub
+  provider: stub
+  ollama:
+    base_url: http://localhost:11434    # Local Ollama server
+    model: phi3:mini                   # Default on-device model
+    timeout_seconds: 5
+  phi3:
+    # Phi-3-mini via llama-cpp-python (direct GGUF inference)
+    model_path: models/local/phi-3-mini-4k-instruct.Q4_K_M.gguf
+    n_ctx: 4096
+    n_threads: 4
+  mistral:
+    model_path: models/local/mistral-7b-instruct-v0.2.Q4_K_M.gguf
+    n_ctx: 4096
+    n_threads: 4
+  stub:
+    enabled: true
+
+vlm:
+  # Vision Language Model — backs the SLM with scene understanding
+  # Options: gemini | ollama | stub
+  provider: stub
+  gemini:
+    model: gemini-1.5-flash
+    api_key_env: GEMINI_API_KEY
+  ollama:
+    base_url: http://localhost:11434
+    model: llava:7b
+    timeout_seconds: 10
+  stub:
+    enabled: true
+
+# ───────────────────────────────────────────────
+# Perception (Object Detection)
+# ───────────────────────────────────────────────
+perception:
+  # Options: yolo | mobilenet | stub
+  backend: stub
+  confidence_threshold: 0.5
+  yolo:
+    model_path: models/local/yolov8n.onnx
+    input_size: [640, 640]
+  mobilenet:
+    model_path: models/local/ssd_mobilenet_v2.onnx
+
+# ───────────────────────────────────────────────
+# Voice / TTS
+# ───────────────────────────────────────────────
+voice:
+  # Options: sarvam | elevenlabs | system | stub
+  provider: stub
+  sarvam:
+    api_key_env: SARVAM_API_KEY
+    voice_id: meera
+    language: hi-IN
+    base_url: https://api.sarvam.ai
+  elevenlabs:
+    api_key_env: ELEVENLABS_API_KEY
+    voice_id: Rachel
+    model: eleven_multilingual_v2
+  system:
+    # Uses the OS TTS engine (pyttsx3 — no API key required)
+    rate: 150
+    volume: 0.9
+  stub:
+    enabled: true
+
+# ───────────────────────────────────────────────
+# Features
+# ───────────────────────────────────────────────
+ivis:
+  stress_threshold: 0.65          # 0–1 scale; interventions fire above this
+  max_interventions_per_minute: 3  # Prevent cognitive overload
+
+therapist:
+  # Therapist is only active when user explicitly requests + RPM == 0
+  require_user_request: true
+  breathing_exercise_seconds: 60
+
+pre_drive:
+  max_route_alternatives: 3
+  anxiety_route_weight: 0.7       # How much anxiety score influences route
+
+post_drive:
+  feedback_delay_seconds: 5       # Wait before triggering post-drive analysis
+  use_pro_model_threshold: 0.8    # Use LLM pro model if drive stress avg > this
+
+# ───────────────────────────────────────────────
+# Navigation & GIS
+# ───────────────────────────────────────────────
+navigation:
+  # Options: mapbox | googlemaps | mappls | stub
+  provider: stub
+  mapbox:
+    api_key_env: MAPBOX_API_KEY
+  googlemaps:
+    api_key_env: GOOGLE_MAPS_API_KEY
+  mappls:
+    api_key_env: MAPPLS_API_KEY
+
+# ───────────────────────────────────────────────
+# Data & Backend
+# ───────────────────────────────────────────────
+backend:
+  # All data stays in India to comply with DPDP Act 2023
+  region: ap-south-1                # AWS Mumbai
+  vector_db_url_env: PINECONE_URL
+  vector_db_key_env: PINECONE_API_KEY
+  graph_db_url_env: NEO4J_URI
+  graph_db_user_env: NEO4J_USER
+  graph_db_password_env: NEO4J_PASSWORD
