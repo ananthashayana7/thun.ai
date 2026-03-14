@@ -11,10 +11,21 @@ const admin = require('firebase-admin');
 const jwt = require('jsonwebtoken');
 const { query } = require('../db/db');
 
-// Lazy-init Firebase Admin (once)
+// Lazy-init Firebase Admin (once). Uses try/catch to gracefully handle the case
+// where the app was already initialised by a route handler (e.g. /auth/verify)
+// before the first protected route is hit.
 let firebaseApp;
 function getFirebaseApp() {
   if (!firebaseApp) {
+    // Re-use an already-initialised app (prevents duplicate-app error if
+    // /auth/verify was called before the first protected route).
+    try {
+      firebaseApp = admin.app('thunai');
+      return firebaseApp;
+    } catch {
+      // App not yet initialised – fall through to create it.
+    }
+
     let credential;
     if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
       try {

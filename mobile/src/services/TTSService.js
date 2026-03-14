@@ -82,15 +82,21 @@ class TTSService {
 
     const lang = opts.language || this._language;
 
-    try {
-      if (this._sarvamKey) {
+    if (this._sarvamKey) {
+      try {
         await this._speakSarvam(text, lang);
-      } else {
-        throw new Error('No Sarvam key');
+      } catch (err) {
+        console.warn('[TTSService] Sarvam failed, using native TTS:', err.message);
+        this._speakNative(text, lang);
+        // Native TTS fires async; tts-finish event will drive the next queue step.
+        return;
       }
-    } catch (err) {
-      console.warn('[TTSService] Sarvam failed, using native TTS:', err.message);
+      // Sarvam completed synchronously via await – drive the next item ourselves
+      // because no tts-finish event fires for Sarvam playback.
+      this._processQueue();
+    } else {
       this._speakNative(text, lang);
+      // tts-finish event on the native TTS engine will call _processQueue next.
     }
   }
 

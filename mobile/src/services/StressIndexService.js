@@ -146,14 +146,20 @@ class StressIndexService {
     let score = 0;
     let count = 0;
 
-    if (hr !== null && hr !== undefined) {
+    // Validate HR is within physiologically plausible range before scoring.
+    const validHR = hr !== null && hr !== undefined
+      && hr >= BIOMETRIC.HR_MIN && hr <= BIOMETRIC.HR_MAX;
+    if (validHR) {
       // HR elevated above baseline: +stress
       const hrDelta = Math.max(0, hr - hrBaseline);
       score += Math.min(100, (hrDelta / 40) * 100); // 40 bpm above baseline = 100
       count++;
     }
 
-    if (hrv !== null && hrv !== undefined) {
+    // Validate HRV is within physiologically plausible range before scoring.
+    const validHRV = hrv !== null && hrv !== undefined
+      && hrv >= BIOMETRIC.HRV_MIN && hrv <= BIOMETRIC.HRV_MAX;
+    if (validHRV) {
       // HRV below baseline: +stress (low HRV = stressed)
       const hrvRatio = Math.max(0, 1 - hrv / hrvBaseline);
       score += Math.min(100, hrvRatio * 100);
