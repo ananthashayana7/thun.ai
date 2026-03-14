@@ -1,0 +1,66 @@
+# ─── Node ────────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.pnp.*
+dist/
+build/
+coverage/
+
+# ─── Environment ─────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# ─── React Native ────────────────────────────────────────────────────────────
+mobile/android/local.properties
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/build/
+mobile/ios/build/
+mobile/ios/Pods/
+mobile/ios/DerivedData/
+mobile/.expo/
+mobile/ios/*.xcworkspace/xcuserdata/
+mobile/ios/*.xcodeproj/xcuserdata/
+mobile/ios/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# ─── macOS / Linux ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ─── Editors ─────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ─── C++ / Edge build artefacts ──────────────────────────────────────────────
+edge/build/
+edge/cmake-build-*/
+*.o
+*.a
+*.so
+*.out
+*.elf
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ─── Secrets / Keys ──────────────────────────────────────────────────────────
+*.pem
+*.key
+*.p12
+*.jks
+google-services.json
+GoogleService-Info.plist
