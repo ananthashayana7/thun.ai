@@ -201,15 +201,13 @@ class PreDriveFeature:
         self, origin: str, destination: str, profile: UserProfile
     ) -> list[RouteOption]:
         raw_routes = self._fetch_routes(origin, destination)
+        scores = [self._score_route(r, profile) for r in raw_routes]
+        min_score = min(scores) if scores else 0
         options = []
-        for i, route in enumerate(raw_routes):
-            score = self._score_route(route, profile)
+        for i, (route, score) in enumerate(zip(raw_routes, scores)):
             triggers = self._extract_triggers(route)
             label = "fastest" if i == 0 else (
-                "peace_of_mind"
-                if score
-                == min(self._score_route(r, profile) for r in raw_routes)
-                else f"option_{i+1}"
+                "peace_of_mind" if score == min_score else f"option_{i+1}"
             )
             options.append(
                 RouteOption(

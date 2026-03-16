@@ -58,7 +58,9 @@ class SarvamTTS(TTSProvider):
         return base64.b64decode(audio_b64)
 
     def _cache_path(self, text: str, language: str) -> Path:
-        key = hashlib.md5(f"{text}|{language}|{self.voice_id}".encode()).hexdigest()
+        key = hashlib.sha256(
+            f"{text}|{language}|{self.voice_id}".encode()
+        ).hexdigest()
         return self.cache_dir / f"{key}.wav"
 
     def warm_cache(self, language: str = "en-IN") -> None:

@@ -211,7 +211,9 @@ def _resolve_env_vars(value: Any) -> Any:
             key = match.group(1)
             resolved = os.environ.get(key)
             if resolved is None:
-                raise ValueError(f"Required env var {key!r} is not set")
+                raise ValueError(
+                    f"Required env var {key!r} for config substitution is not set"
+                )
             return resolved
 
         return _ENV_PATTERN.sub(_replacer, value)
@@ -307,5 +309,7 @@ def get(section: str, *keys: str, default: Any = None) -> Any:
     return node
 
 
-# Provide a no-op cache_clear for compatibility with references in tests/spec
+# External reference tests expect ``load_config.cache_clear()`` to exist (mirroring
+# an lru_cache-wrapped loader in the developer guide). The current loader is
+# stateless, so expose a no-op method to retain that interface without caching.
 load_config.cache_clear = lambda: None  # type: ignore[attr-defined]
