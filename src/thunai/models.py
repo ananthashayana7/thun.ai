@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import IntEnum
 from typing import List, Literal, Optional, Tuple
 
@@ -21,7 +21,7 @@ class AnxietySensitivityScore(BaseModel):
 
 class UserProfile(BaseModel):
     user_id: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     anxiety_score: AnxietySensitivityScore
     baseline_hr_bpm: float = 72.0
     baseline_hrv_ms: float = 45.0
@@ -136,7 +136,7 @@ class DriveSession(BaseModel):
 class DriveReport(BaseModel):
     drive_id: str
     user_id: str
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     overall_confidence_score: float
     narrative: str
     top_triggers: List[str]

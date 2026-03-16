@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from thunai.config import PostDriveConfig
@@ -198,7 +198,7 @@ class PostDriveFeature:
         return DriveReport(
             drive_id=session.drive_id,
             user_id=session.user_id,
-            generated_at=datetime.utcnow(),
+            generated_at=datetime.now(timezone.utc),
             overall_confidence_score=confidence_end,
             narrative=narrative,
             top_triggers=top_triggers,

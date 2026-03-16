@@ -17,10 +17,11 @@ from thunai.intelligence.base import BaseLLMProvider, LLMProvider, LLMResponse, 
 try:
     import google.generativeai as _genai  # type: ignore[import]
 except ImportError:  # pragma: no cover - optional dependency
+    def _raise_genai_missing(*_args, **_kwargs):
+        raise ImportError("google-generativeai is required for GeminiLLM")
+
     _genai = SimpleNamespace(
-        GenerativeModel=lambda *_, **__: (_ for _ in ()).throw(
-            ImportError("google-generativeai is required for GeminiLLM")
-        ),
+        GenerativeModel=_raise_genai_missing,
         GenerationConfig=lambda *_, **__: {},
         configure=lambda *_, **__: None,
     )

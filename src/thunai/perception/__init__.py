@@ -138,7 +138,7 @@ class StubPerception:
         self.cfg = cfg.get("perception", cfg)
         self._counter = 0
         stub_cfg = self.cfg.get("stub", {})
-        self.emergency_rate = max(1, int(stub_cfg.get("frame_rate_hz", 5)))
+        self.emergency_interval = max(1, int(stub_cfg.get("frame_rate_hz", 5)))
 
     @property
     def provider_name(self) -> str:
@@ -147,7 +147,7 @@ class StubPerception:
     def process_frame(self) -> PerceptionFrame:
         self._counter += 1
         now = int(time.time() * 1000)
-        emergency = self._counter % self.emergency_rate == 0
+        emergency = self._counter % self.emergency_interval == 0
         detections = [
             DetectedObject(
                 label="car",

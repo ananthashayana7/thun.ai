@@ -207,12 +207,14 @@ def _resolve_env_vars(value: Any) -> Any:
         if not _ENV_PATTERN.search(value):
             return value
 
+        original_value = value
+
         def _replacer(match: re.Match[str]) -> str:
             key = match.group(1)
             resolved = os.environ.get(key)
             if resolved is None:
                 raise ValueError(
-                    f"Required env var {key!r} for config substitution is not set"
+                    f"Required env var {key!r} for config value {original_value!r} is not set"
                 )
             return resolved
 
