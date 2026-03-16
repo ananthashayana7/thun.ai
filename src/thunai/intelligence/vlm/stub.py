@@ -33,3 +33,18 @@ class StubVLMProvider(BaseVLMProvider):
             model=self.model_name,
             detected_objects=["road", "vehicle", "two-wheeler"],
         )
+
+
+class StubVLM:
+    """Lightweight stub used in developer reference tests."""
+
+    provider_name = "stub"
+
+    def describe_scene(self, image_bytes: bytes, prompt: str) -> str:
+        # Simple heuristic to flag emergency vehicles from prompt text
+        if "emergency" in prompt.lower():
+            return "emergency vehicle detected"
+        return "synthetic scene description"
+
+    def is_healthy(self) -> bool:
+        return True

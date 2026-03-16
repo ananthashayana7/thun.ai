@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 
-from thunai.intelligence.base import BaseSLMProvider, SLMResponse
+from thunai.intelligence.base import BaseSLMProvider, SLMProvider, SLMResponse
 
 _INTERVENTIONS: dict[str, str] = {
     "stall": "It's alright. Gently press clutch and brake, turn the key, release clutch and brake gradually.",
@@ -56,3 +56,30 @@ class StubSLMProvider(BaseSLMProvider):
             model=self.model_name,
             latency_ms=latency_ms,
         )
+
+
+# Developer reference stub (v1)
+INTERVENTION_RULES = {
+    "emergency": "Emergency vehicle nearby. Move to the left and stop safely.",
+    "stall": "Stay calm. Apply the handbrake, then restart gently.",
+    "breathing": "Take a slow breath in. Hold. Now breathe out slowly.",
+    "speed": "Ease off the accelerator. Give yourself more space.",
+    "default": "You are doing well. Stay steady.",
+}
+
+
+class StubSLM(SLMProvider):
+    provider_name = "stub"
+
+    def __init__(self, cfg: dict | None = None):
+        self.cfg = cfg or {}
+
+    def infer(self, prompt: str, **kwargs) -> str:
+        prompt_lower = prompt.lower()
+        for key, response in INTERVENTION_RULES.items():
+            if key in prompt_lower:
+                return response
+        return INTERVENTION_RULES["default"]
+
+    def is_healthy(self) -> bool:
+        return True
