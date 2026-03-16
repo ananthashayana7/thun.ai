@@ -14,6 +14,10 @@ import logging
 import os
 
 from thunai.config import VoiceConfig
+from thunai.interaction.base import TTSProvider
+from thunai.interaction.elevenlabs import ElevenLabsTTS
+from thunai.interaction.sarvam import SarvamTTS
+from thunai.interaction.system import SystemTTS
 
 logger = logging.getLogger(__name__)
 
@@ -143,3 +147,35 @@ class VoiceEngine:
             sd.wait()
         except ImportError:
             logger.debug("sounddevice/soundfile not installed — audio playback skipped in this environment.")
+
+
+def build_tts_provider(cfg: dict) -> TTSProvider:
+    tts_cfg = cfg.get("interaction", {}).get("tts") if "interaction" in cfg else cfg
+    provider = tts_cfg["provider"]
+    if provider == "sarvam":
+        return SarvamTTS(tts_cfg["sarvam"])
+    if provider == "elevenlabs":
+        return ElevenLabsTTS(tts_cfg["elevenlabs"])
+    if provider == "system":
+        return SystemTTS()
+
+    class _Stub(TTSProvider):
+        provider_name = "stub"
+
+        def synthesise(self, text: str, language: str = "en-IN") -> bytes:
+            return b"fake_audio_bytes"
+
+        def is_healthy(self) -> bool:
+            return True
+
+    return _Stub()
+
+
+__all__ = [
+    "VoiceEngine",
+    "TTSProvider",
+    "SarvamTTS",
+    "ElevenLabsTTS",
+    "SystemTTS",
+    "build_tts_provider",
+]

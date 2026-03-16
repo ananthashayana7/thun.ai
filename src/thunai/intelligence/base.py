@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncGenerator, Optional
 
 
 @dataclass
@@ -138,3 +138,70 @@ class BaseVLMProvider(ABC):
     def is_available(self) -> bool:
         """Return True if the provider is reachable / configured."""
         return True
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Developer reference interfaces (v1)
+# ───────────────────────────────────────────────────────────────────────────────
+
+
+class LLMProvider(ABC):
+    """Cloud LLM — used for post-drive reports and AI Therapist sessions."""
+
+    @property
+    @abstractmethod
+    def provider_name(self) -> str: ...
+
+    @abstractmethod
+    def complete(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+    ) -> str:
+        """Synchronous completion. Returns full response string."""
+
+    @abstractmethod
+    async def complete_stream(
+        self, system: str, user: str, max_tokens: int = 1024
+    ) -> AsyncGenerator[str, None]:
+        """Async streaming generator yielding text chunks."""
+
+    @abstractmethod
+    def is_healthy(self) -> bool:
+        """Returns True if the provider API is reachable."""
+
+
+class SLMProvider(ABC):
+    """On-device SLM — must return within the IVIS latency budget."""
+
+    @property
+    @abstractmethod
+    def provider_name(self) -> str: ...
+
+    @abstractmethod
+    def infer(
+        self, prompt: str, max_tokens: int = 128, temperature: float = 0.3
+    ) -> str:
+        """Synchronous local inference. MUST complete < 500ms."""
+
+    @abstractmethod
+    def is_healthy(self) -> bool:
+        """Returns True if the provider is reachable."""
+
+
+class VLMProvider(ABC):
+    """Vision LLM — processes image frames for scene understanding."""
+
+    @property
+    @abstractmethod
+    def provider_name(self) -> str: ...
+
+    @abstractmethod
+    def describe_scene(self, image_bytes: bytes, prompt: str) -> str:
+        """Describe a camera frame given a text prompt."""
+
+    @abstractmethod
+    def is_healthy(self) -> bool:
+        """Returns True if the provider is reachable."""

@@ -9,9 +9,21 @@ from __future__ import annotations
 
 import logging
 import os
+from types import SimpleNamespace
 
 from thunai.config import GeminiConfig
-from thunai.intelligence.base import BaseLLMProvider, LLMResponse, Message
+from thunai.intelligence.base import BaseLLMProvider, LLMProvider, LLMResponse, Message
+
+try:
+    import google.generativeai as _genai  # type: ignore[import]
+except ImportError:  # pragma: no cover - optional dependency
+    _genai = SimpleNamespace(
+        GenerativeModel=lambda *_, **__: (_ for _ in ()).throw(
+            ImportError("google-generativeai is required for GeminiLLM")
+        ),
+        GenerationConfig=lambda *_, **__: {},
+        configure=lambda *_, **__: None,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -114,3 +126,42 @@ class GeminiProvider(BaseLLMProvider):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+
+
+# Developer reference implementation (v1)
+class GeminiLLM(LLMProvider):
+    provider_name = "gemini"
+
+    def __init__(self, cfg: dict):
+        genai = _genai
+        try:
+            genai.configure(api_key=cfg["api_key"])
+        except Exception:
+            # if configure is stubbed, ignore
+            pass
+        self.model_name = cfg["model"]
+        self.model = genai.GenerativeModel(
+            model_name=self.model_name,
+            generation_config=genai.GenerationConfig(
+                max_output_tokens=cfg.get("max_tokens", 1024),
+                temperature=cfg.get("temperature", 0.7),
+            ),
+        )
+
+    def complete(self, system: str, user: str, **kwargs) -> str:
+        prompt = f"{system}\n\n{user}" if system else user
+        response = self.model.generate_content(prompt)
+        return response.text
+
+    async def complete_stream(self, system: str, user: str, **kwargs):
+        prompt = f"{system}\n\n{user}" if system else user
+        for chunk in self.model.generate_content(prompt, stream=True):
+            if chunk.text:
+                yield chunk.text
+
+    def is_healthy(self) -> bool:
+        try:
+            self.complete("", "ping")
+            return True
+        except Exception:
+            return False

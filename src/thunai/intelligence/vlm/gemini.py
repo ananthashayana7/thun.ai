@@ -84,3 +84,38 @@ class GeminiVLMProvider(BaseVLMProvider):
             provider=self.provider_name,
             model=self.model_name,
         )
+
+
+class GeminiVLM:
+    """Developer reference VLM that calls Gemini multimodal API."""
+
+    provider_name = "gemini"
+
+    def __init__(self, cfg: dict):
+        self.model = cfg["model"]
+        self.api_key = cfg.get("api_key")
+        self.max_tokens = cfg.get("max_tokens", 256)
+
+    def describe_scene(self, image_bytes: bytes, prompt: str) -> str:
+        import base64
+        import requests
+
+        image_b64 = base64.b64encode(image_bytes).decode()
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "image": image_b64,
+            "max_tokens": self.max_tokens,
+        }
+        resp = requests.post(
+            "https://generativeai.googleapis.com/v1beta/models",
+            json=payload,
+            headers={"Authorization": f"Bearer {self.api_key}"} if self.api_key else {},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("description", "") or data.get("response", "") or ""
+
+    def is_healthy(self) -> bool:
+        return True
