@@ -16,11 +16,11 @@ def test_load_config_returns_thunai_config():
 
 
 def test_default_slm_vlm_voice_are_stub():
-    """On-device providers default to stub so tests work without API keys."""
+    """SLM defaults to stub (on-device, needs local model); VLM uses Gemini; voice uses system TTS."""
     config = load_config()
     assert config.slm.provider == "stub"
-    assert config.vlm.provider == "stub"
-    assert config.voice.provider == "stub"
+    assert config.vlm.provider == "gemini"
+    assert config.voice.provider == "system"
 
 
 def test_default_llm_provider():

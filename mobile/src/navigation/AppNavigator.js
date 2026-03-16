@@ -17,7 +17,9 @@ import TherapistScreen from '../screens/TherapistScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 
 import { useAnxietyProfileStore } from '../store/anxietyProfile';
-import { COLORS } from '../utils/constants';
+import RouteScoring from '../services/RouteScoring';
+import TTSService from '../services/TTSService';
+import { COLORS, API } from '../utils/constants';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -40,8 +42,24 @@ function MainTabs() {
 }
 
 export default function AppNavigator() {
-  const { profile } = useAnxietyProfileStore();
+  const { profile, loadProfile } = useAnxietyProfileStore();
   const isOnboarded = profile?.onboardingComplete === true;
+
+  useEffect(() => {
+    // Load persisted profile on startup
+    loadProfile();
+
+    // Wire up services that require API keys at app start
+    if (API.GOOGLE_MAPS_KEY) {
+      RouteScoring.setApiKey(API.GOOGLE_MAPS_KEY);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-initialise TTS whenever the profile language changes
+  useEffect(() => {
+    const lang = profile?.ttsLanguage || 'en-IN';
+    TTSService.init(null, lang); // Sarvam key injected separately if available
+  }, [profile?.ttsLanguage]);
 
   return (
     <NavigationContainer>

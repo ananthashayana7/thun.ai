@@ -4,6 +4,7 @@ Configuration loader for thun.ai.
 Supports:
 - YAML config files (config/default.yaml, optionally config/local.yaml)
 - Environment variable overrides: THUNAI_<SECTION>_<KEY>=value
+- Optional .env file loading via python-dotenv (if installed)
 """
 
 from __future__ import annotations
@@ -19,6 +20,20 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 _CONFIG_DIR = Path(__file__).parent.parent.parent / "config"
+_REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+def _load_dotenv() -> None:
+    """Load .env file from the repository root if python-dotenv is installed."""
+    try:
+        from dotenv import load_dotenv  # type: ignore[import]
+
+        env_path = _REPO_ROOT / ".env"
+        if env_path.exists():
+            load_dotenv(dotenv_path=env_path, override=False)
+            logger.debug("Loaded .env from %s", env_path)
+    except ImportError:
+        pass  # python-dotenv is optional
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -34,10 +49,10 @@ class AppConfig(BaseModel):
 
 
 class GeminiConfig(BaseModel):
-    model: str = "gemini-1.5-flash"
-    pro_model: str = "gemini-1.5-pro"
+    model: str = "gemini-2.0-flash"
+    pro_model: str = "gemini-2.0-flash-thinking-exp"
     api_key_env: str = "GEMINI_API_KEY"
-    max_output_tokens: int = 2048
+    max_output_tokens: int = 4096
     temperature: float = 0.4
 
 
@@ -80,7 +95,7 @@ class SLMConfig(BaseModel):
 
 
 class VLMGeminiConfig(BaseModel):
-    model: str = "gemini-1.5-flash"
+    model: str = "gemini-2.0-flash"
     api_key_env: str = "GEMINI_API_KEY"
 
 
@@ -132,27 +147,34 @@ class VoiceConfig(BaseModel):
 
 
 class IVISConfig(BaseModel):
-    stress_threshold: float = 0.65
-    max_interventions_per_minute: int = 3
+    stress_threshold: float = 0.60
+    max_interventions_per_minute: int = 4
 
 
 class TherapistConfig(BaseModel):
-    require_user_request: bool = True
-    breathing_exercise_seconds: int = 60
+    require_user_request: bool = False
+    breathing_exercise_seconds: int = 120
 
 
 class PreDriveConfig(BaseModel):
-    max_route_alternatives: int = 3
-    anxiety_route_weight: float = 0.7
+    max_route_alternatives: int = 5
+    anxiety_route_weight: float = 0.75
 
 
 class PostDriveConfig(BaseModel):
-    feedback_delay_seconds: int = 5
-    use_pro_model_threshold: float = 0.8
+    feedback_delay_seconds: int = 3
+    use_pro_model_threshold: float = 0.6
+
+
+class NavigationGoogleMapsConfig(BaseModel):
+    api_key_env: str = "GOOGLE_MAPS_API_KEY"
+    routes_base_url: str = "https://routes.googleapis.com"
+    places_base_url: str = "https://places.googleapis.com"
 
 
 class NavigationConfig(BaseModel):
     provider: str = "stub"
+    googlemaps: NavigationGoogleMapsConfig = Field(default_factory=NavigationGoogleMapsConfig)
 
 
 class BackendConfig(BaseModel):
@@ -220,8 +242,11 @@ def load_config(config_dir: Path | None = None) -> ThunaiConfig:
       1. Built-in Pydantic defaults
       2. ``config/default.yaml``
       3. ``config/local.yaml`` (optional, not committed — for local overrides)
-      4. ``THUNAI_*`` environment variables
+      4. ``.env`` file at repository root (loaded via python-dotenv if available)
+      5. ``THUNAI_*`` environment variables
     """
+    _load_dotenv()
+
     config_dir = config_dir or _CONFIG_DIR
     raw: dict[str, Any] = {}
 
