@@ -97,6 +97,11 @@ thunai status
 thunai demo
 ```
 
+### Hardware readiness guardrails
+
+- `thunai status` now surfaces plug-and-play readiness (OBD-2, biometrics, camera) and enforces a 2s disconnect rule with a 50ms latency budget.
+- The IVIS engine degrades gracefully: if OBD drops it falls back to biometrics + vision; if camera drops it falls back to OBD + biometrics.
+
 ---
 
 ## Features
@@ -138,4 +143,3 @@ pytest tests/ -v
 ```
 
 All 50 tests run without any API keys. Providers without credentials gracefully fall back to stub implementations.
-

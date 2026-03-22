@@ -22,6 +22,7 @@ from thunai.features.therapist import AITherapist
 from thunai.intelligence.llm import create_llm_provider
 from thunai.intelligence.slm import create_slm_provider
 from thunai.intelligence.vlm import create_vlm_provider
+from thunai.hardware import HardwareMonitor
 from thunai.interaction import VoiceEngine
 from thunai.perception import ObjectDetector
 
@@ -62,6 +63,7 @@ class ThunaiEngine:
         self.pre_drive = PreDriveAdvisor(config.pre_drive)
         self.therapist = AITherapist(config.therapist, self._llm_pro, self._voice)
         self.post_drive = PostDriveAnalyser(config.post_drive, self._llm, self._llm_pro)
+        self._hardware = HardwareMonitor(config.hardware)
 
         self._session_start: Optional[float] = None
         self._session_events = []
@@ -115,13 +117,23 @@ class ThunaiEngine:
         and optionally a camera frame.
         """
         self._voice.update_speed(obd.speed_kmh)
+        self._hardware.tick_obd()
 
         perception_result = None
         if frame_bytes:
             perception_result = self._detector.detect(frame_bytes)
+            self._hardware.tick_camera()
 
         events = self.ivis.process_frame(obd, perception_result)
         self._session_events.extend(events)
+
+    def update_biometrics(self, latency_ms: float = 0.0) -> None:
+        """
+        Record a biometrics heartbeat (HR/HRV) from the smartwatch stream.
+
+        This keeps hardware readiness aligned with the 2s disconnect rule.
+        """
+        self._hardware.tick_biometrics(latency_ms=latency_ms)
 
     def stop_session(self, route: Optional[Route] = None) -> DriveSummary:
         """
@@ -157,6 +169,10 @@ class ThunaiEngine:
             "voice": self._config.voice.provider,
             "perception": self._config.perception.backend,
         }
+
+    def get_readiness_report(self):
+        """Expose hardware readiness for diagnostics (status CLI / health endpoints)."""
+        return self._hardware.assess()
 
     def _setup_logging(self) -> None:
         logging.basicConfig(
