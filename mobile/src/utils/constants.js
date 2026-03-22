@@ -78,6 +78,8 @@ export const SEVERITY = {
 export const API = {
   BASE_URL: process.env.BACKEND_URL || 'https://api.thun.ai',
   TIMEOUT_MS: 10000,
+  // Google API key – set GOOGLE_MAPS_API_KEY in your build environment / .env
+  GOOGLE_MAPS_KEY: process.env.GOOGLE_MAPS_API_KEY || '',
 };
 
 // ─── SQLite ───────────────────────────────────────────────────────────────────

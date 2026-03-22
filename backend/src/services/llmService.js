@@ -1,6 +1,6 @@
 /**
  * llmService.js
- * LLM proxy – Anthropic Claude primary, OpenAI GPT-4o-mini fallback.
+ * LLM proxy – Google Gemini primary, Anthropic Claude secondary, OpenAI GPT-4o-mini fallback.
  * Generates:
  *   1. Confidence narrative (200–350 words)
  *   2. Synthetic scenario variants for stress events (severity > 3)
@@ -8,12 +8,17 @@
  */
 'use strict';
 
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
 
 const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || '30000', 10);
 const NARRATIVE_MIN_WORDS = 200;
 const NARRATIVE_MAX_WORDS = 350;
+
+const geminiClient = process.env.GEMINI_API_KEY
+  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+  : null;
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIMEOUT_MS });
@@ -27,6 +32,14 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIM
  */
 async function generateConfidenceNarrative(params) {
   const prompt = buildNarrativePrompt(params);
+
+  if (geminiClient) {
+    try {
+      return await callGemini(prompt, 1024);
+    } catch (err) {
+      console.warn('[LLM] Gemini failed for narrative, trying Claude:', err.message);
+    }
+  }
 
   try {
     return await callClaude(prompt, 512);
@@ -76,11 +89,21 @@ async function generateScenarioVariants(stressEvents, driverProfile) {
   const prompt = buildScenarioPrompt(highSeverity, driverProfile);
 
   let raw;
-  try {
-    raw = await callClaude(prompt, 1024);
-  } catch (err) {
-    console.warn('[LLM] Claude failed for scenarios, trying OpenAI:', err.message);
-    raw = await callOpenAI(prompt, 1024);
+  if (geminiClient) {
+    try {
+      raw = await callGemini(prompt, 2048);
+    } catch (err) {
+      console.warn('[LLM] Gemini failed for scenarios, trying Claude:', err.message);
+    }
+  }
+
+  if (!raw) {
+    try {
+      raw = await callClaude(prompt, 1024);
+    } catch (err) {
+      console.warn('[LLM] Claude failed for scenarios, trying OpenAI:', err.message);
+      raw = await callOpenAI(prompt, 1024);
+    }
   }
 
   return parseScenarioJSON(raw);
@@ -133,6 +156,14 @@ function parseScenarioJSON(raw) {
  * @returns {string} assistant response
  */
 async function generateTherapistResponse(messages, systemContext) {
+  if (geminiClient) {
+    try {
+      return await callGeminiMessages(messages, systemContext, 512);
+    } catch (err) {
+      console.warn('[LLM] Gemini chat failed, trying Claude:', err.message);
+    }
+  }
+
   try {
     return await callClaudeMessages(messages, systemContext, 256);
   } catch (err) {
@@ -142,6 +173,52 @@ async function generateTherapistResponse(messages, systemContext) {
 }
 
 // ─── LLM Client Wrappers ──────────────────────────────────────────────────────
+
+/**
+ * Call Gemini with a single text prompt.
+ * @param {string} prompt
+ * @param {number} maxTokens
+ * @returns {Promise<string>}
+ */
+async function callGemini(prompt, maxTokens) {
+  if (!geminiClient) throw new Error('Gemini client not initialised (GEMINI_API_KEY not set)');
+  const model = geminiClient.getGenerativeModel({
+    model: 'gemini-2.0-flash',
+    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
+  });
+  const result = await model.generateContent(prompt);
+  return result.response.text();
+}
+
+/**
+ * Call Gemini with a conversation history (chat).
+ * @param {Array<{role: string, content: string}>} messages
+ * @param {string} systemContext
+ * @param {number} maxTokens
+ * @returns {Promise<string>}
+ */
+async function callGeminiMessages(messages, systemContext, maxTokens) {
+  if (!geminiClient) throw new Error('Gemini client not initialised (GEMINI_API_KEY not set)');
+  const model = geminiClient.getGenerativeModel({
+    model: 'gemini-2.0-flash',
+    systemInstruction: systemContext,
+    generationConfig: { maxOutputTokens: maxTokens, temperature: 0.4 },
+  });
+
+  const history = messages.slice(0, -1).map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
+
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage?.content) {
+    throw new Error('callGeminiMessages: conversation must end with a non-empty user message');
+  }
+
+  const chat = model.startChat({ history });
+  const result = await chat.sendMessage(lastMessage.content);
+  return result.response.text();
+}
 
 async function callClaude(prompt, maxTokens) {
   const msg = await anthropic.messages.create({
