@@ -100,7 +100,12 @@ class HardwareMonitor:
 
         effective_inputs, fallback_path = self._compute_effective_stack(available)
         plug_and_play = "obd" in available and "biometrics" in available
-        status = "offline" if not available else ("ready" if plug_and_play and not faults else "degraded")
+        if not available:
+            status = "offline"
+        elif plug_and_play and not faults:
+            status = "ready"
+        else:
+            status = "degraded"
 
         max_latency = max((self._latency_ms[k] for k in available), default=0.0)
         latency_guard = max_latency <= self._config.latency_budget_ms if available else False
