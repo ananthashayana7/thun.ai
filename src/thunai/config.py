@@ -152,6 +152,26 @@ class PostDriveConfig(BaseModel):
     use_pro_model_threshold: float = 0.8
 
 
+class SyntheticDataConfig(BaseModel):
+    enabled: bool = True
+    scenarios_per_event: int = 3
+    max_events_per_drive: int = 3
+    output_dir: str = "artifacts/synthetic-data"
+    target: str = "slm_finetune"
+
+
+class DeploymentConfig(BaseModel):
+    mobile_app: str = "react-native"
+    edge_unit: str = "rv1126"
+    edge_link: str = "ble"
+    edge_cv_runtime: str = "rknn"
+    backend_api: str = "node-express"
+    backend_transport: str = "https-tls"
+    cloud_database: str = "postgresql"
+    local_store: str = "sqlite"
+    local_retention_days: int = 90
+
+
 class NavigationConfig(BaseModel):
     provider: str = "stub"
 
@@ -171,6 +191,8 @@ class ThunaiConfig(BaseModel):
     therapist: TherapistConfig = Field(default_factory=TherapistConfig)
     pre_drive: PreDriveConfig = Field(default_factory=PreDriveConfig)
     post_drive: PostDriveConfig = Field(default_factory=PostDriveConfig)
+    synthetic_data: SyntheticDataConfig = Field(default_factory=SyntheticDataConfig)
+    deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     navigation: NavigationConfig = Field(default_factory=NavigationConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
 

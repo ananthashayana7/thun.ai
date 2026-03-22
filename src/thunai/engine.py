@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 from thunai.config import ThunaiConfig, load_config
 from thunai.features.ivis import IVISEngine, OBDSnapshot
@@ -157,6 +158,29 @@ class ThunaiEngine:
             "voice": self._config.voice.provider,
             "perception": self._config.perception.backend,
         }
+
+    def get_stack_manifest(self) -> dict[str, Any]:
+        """Return the plug-and-play stack manifest for device/backend wiring."""
+        return {
+            "app": self._config.app.model_dump(),
+            "deployment": self._config.deployment.model_dump(),
+            "providers": self.get_provider_info(),
+            "synthetic_data": self._config.synthetic_data.model_dump(),
+        }
+
+    def export_synthetic_dataset(
+        self,
+        summary: DriveSummary,
+        *,
+        output_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """
+        Build and optionally persist a structured synthetic dataset artifact.
+        """
+        dataset = self.post_drive.build_synthetic_dataset(summary, self._config.synthetic_data)
+        if output_path is not None:
+            dataset.write_json(output_path)
+        return dataset.to_dict()
 
     def _setup_logging(self) -> None:
         logging.basicConfig(
