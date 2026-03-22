@@ -14,9 +14,10 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
-from thunai.config import PostDriveConfig
+from thunai.config import PostDriveConfig, SyntheticDataConfig
 from thunai.features.ivis import DriveEvent
 from thunai.intelligence.base import BaseLLMProvider, LLMProvider, Message
 from thunai.models import DriveReport, DriveSession
@@ -58,6 +59,46 @@ class FeedbackReport:
     model_used: str
     stress_score_label: str = "low"  # low | moderate | high
     suggestions: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SyntheticScenario:
+    """Single training sample derived from a stressful drive event."""
+
+    scenario: str
+    trigger: str
+    suggested_response: str
+    source_event: str
+    stress_delta: float
+
+
+@dataclass
+class SyntheticDataset:
+    """Portable synthetic dataset artifact for downstream model training."""
+
+    target: str
+    provider: str
+    model: str
+    samples: list[SyntheticScenario] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target": self.target,
+            "provider": self.provider,
+            "model": self.model,
+            "created_at": self.created_at.isoformat(),
+            "sample_count": len(self.samples),
+            "metadata": self.metadata,
+            "samples": [sample.__dict__ for sample in self.samples],
+        }
+
+    def write_json(self, path: str | Path) -> Path:
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        return output_path
 
 
 class PostDriveAnalyser:
@@ -144,6 +185,52 @@ class PostDriveAnalyser:
         logger.info("Generated %d synthetic scenarios.", len(scenarios))
         return scenarios
 
+    def build_synthetic_dataset(
+        self,
+        summary: DriveSummary,
+        config: SyntheticDataConfig,
+    ) -> SyntheticDataset:
+        """
+        Generate a structured synthetic dataset for downstream SLM/VLM training.
+
+        The returned dataset is transportable as JSON so device and backend
+        pipelines can ingest it without binding directly to an LLM SDK.
+        """
+        dataset = SyntheticDataset(
+            target=config.target,
+            provider=self._llm_flash.provider_name,
+            model=self._llm_flash.model_name,
+            metadata={
+                "route_label": summary.route_label,
+                "average_stress": summary.average_stress,
+                "peak_stress": summary.peak_stress,
+                "duration_minutes": summary.duration_minutes,
+            },
+        )
+
+        if not config.enabled:
+            logger.info("Synthetic data generation is disabled in config.")
+            return dataset
+
+        high_stress_events = [
+            event for event in summary.events if event.stress_delta >= 0.2
+        ][: config.max_events_per_drive]
+
+        for event in high_stress_events:
+            dataset.samples.extend(
+                self._generate_structured_samples(
+                    event,
+                    scenarios_per_event=config.scenarios_per_event,
+                )
+            )
+
+        logger.info(
+            "Built synthetic dataset with %d samples for target=%s.",
+            len(dataset.samples),
+            dataset.target,
+        )
+        return dataset
+
     @staticmethod
     def _build_prompt(summary: DriveSummary) -> str:
         event_types = ", ".join({e.event_type for e in summary.events}) or "none"
@@ -159,6 +246,72 @@ class PostDriveAnalyser:
             f"Route type: {summary.route_label}. "
             "Please provide personalised feedback."
         )
+
+    def _generate_structured_samples(
+        self,
+        event: DriveEvent,
+        *,
+        scenarios_per_event: int,
+    ) -> list[SyntheticScenario]:
+        prompt = (
+            f"Stress event: trigger={event.event_type}, description={event.description}, "
+            f"stress_delta={event.stress_delta:.2f}. Generate a JSON array of "
+            f"{scenarios_per_event} objects with keys scenario, trigger, suggested_response. "
+            "Keep the scenarios grounded in Indian road conditions. Output only JSON."
+        )
+        response = self._llm_flash.generate(
+            [
+                Message(role="system", content=SYNTHETIC_SYSTEM.replace("{count}", str(scenarios_per_event))),
+                Message(role="user", content=prompt),
+            ],
+            max_tokens=800,
+        )
+        return self._parse_structured_samples(
+            response.text,
+            event=event,
+            scenarios_per_event=scenarios_per_event,
+        )
+
+    @staticmethod
+    def _parse_structured_samples(
+        raw_text: str,
+        *,
+        event: DriveEvent,
+        scenarios_per_event: int,
+    ) -> list[SyntheticScenario]:
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError:
+            parsed = [
+                {
+                    "scenario": line.replace("Scenario:", "", 1).strip(),
+                    "trigger": event.event_type,
+                    "suggested_response": "Slow down, breathe steadily, and follow the IVIS prompt.",
+                }
+                for line in raw_text.splitlines()
+                if line.strip().startswith("Scenario:")
+            ]
+
+        samples: list[SyntheticScenario] = []
+        for item in parsed[:scenarios_per_event]:
+            if not isinstance(item, dict):
+                continue
+            scenario = str(item.get("scenario", "")).strip()
+            if not scenario:
+                continue
+            samples.append(
+                SyntheticScenario(
+                    scenario=scenario,
+                    trigger=str(item.get("trigger", event.event_type)).strip() or event.event_type,
+                    suggested_response=(
+                        str(item.get("suggested_response", "")).strip()
+                        or "Slow down, breathe steadily, and follow the IVIS prompt."
+                    ),
+                    source_event=event.description,
+                    stress_delta=event.stress_delta,
+                )
+            )
+        return samples
 
 
 # Developer reference implementation (v1)

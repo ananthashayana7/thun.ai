@@ -122,6 +122,24 @@ post_drive:
   feedback_delay_seconds: 3       # Wait before triggering post-drive analysis
   use_pro_model_threshold: 0.6    # Use LLM pro model if drive stress avg > this
 
+synthetic_data:
+  enabled: true
+  scenarios_per_event: 3
+  max_events_per_drive: 3
+  output_dir: artifacts/synthetic-data
+  target: slm_finetune
+
+deployment:
+  mobile_app: react-native
+  edge_unit: rv1126
+  edge_link: ble
+  edge_cv_runtime: rknn
+  backend_api: node-express
+  backend_transport: https-tls
+  cloud_database: postgresql
+  local_store: sqlite
+  local_retention_days: 90
+
 # ───────────────────────────────────────────────
 # Navigation & GIS
 # ───────────────────────────────────────────────
