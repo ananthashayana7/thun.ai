@@ -72,7 +72,7 @@ def test_local_yaml_override(tmp_path, monkeypatch):
     assert config.app.log_level == "DEBUG"
 
 
-def test_explicit_config_path_loads_single_file(tmp_path):
+def test_load_config_with_explicit_path(tmp_path):
     config_file = tmp_path / "custom.yaml"
     config_file.write_text("app:\n  log_level: WARNING\n")
 
