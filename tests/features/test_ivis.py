@@ -9,6 +9,7 @@ from thunai.features.ivis import DriveEvent, IVISEngine, OBDSnapshot
 from thunai.intelligence.slm import StubSLMProvider
 from thunai.interaction import VoiceEngine
 from thunai.config import VoiceConfig
+from thunai.perception import PerceptionResult
 
 
 def _make_engine(stress_threshold: float = 0.65) -> IVISEngine:
@@ -81,3 +82,94 @@ def test_rate_limiting_interventions():
     for _ in range(10):
         engine.process_frame(obd)
     assert len(engine._recent_interventions) <= 2
+
+
+# ── New tests for stress history tracking ────────────────────────────────────
+
+def test_stress_average_and_peak_tracked():
+    """stress_average and stress_peak should reflect session history."""
+    engine = _make_engine()
+    engine.reset_session()
+
+    obd_stall = OBDSnapshot(speed_kmh=0, rpm=0, gear=0)
+    obd_normal = OBDSnapshot(speed_kmh=40, rpm=2200, gear=3)
+
+    # Build up stress then let it decay
+    for _ in range(5):
+        engine.process_frame(obd_stall)
+    peak_after_stalls = engine.stress_peak
+
+    for _ in range(20):
+        engine.process_frame(obd_normal)
+
+    # Average should be below peak (stress decayed over normal driving)
+    assert engine.stress_peak >= engine.stress_average
+    assert engine.stress_peak == peak_after_stalls  # peak captured at stall
+
+
+def test_stress_peak_zero_before_any_frame():
+    engine = _make_engine()
+    engine.reset_session()
+    assert engine.stress_peak == 0.0
+    assert engine.stress_average == 0.0
+
+
+def test_reset_session_clears_history():
+    """reset_session() must wipe history so subsequent drives start fresh."""
+    engine = _make_engine()
+    obd_stall = OBDSnapshot(speed_kmh=0, rpm=0, gear=0)
+    for _ in range(5):
+        engine.process_frame(obd_stall)
+    assert engine.stress_peak > 0.0
+
+    engine.reset_session()
+    assert engine.stress_peak == 0.0
+    assert engine.stress_level == 0.0
+
+
+# ── OBD input validation ─────────────────────────────────────────────────────
+
+def test_obd_snapshot_clamps_negative_speed():
+    obd = OBDSnapshot(speed_kmh=-10, rpm=2000, gear=2)
+    assert obd.speed_kmh == 0.0
+
+
+def test_obd_snapshot_clamps_negative_rpm():
+    obd = OBDSnapshot(speed_kmh=30, rpm=-500, gear=2)
+    assert obd.rpm == 0
+
+
+def test_obd_snapshot_clamps_throttle_over_100():
+    obd = OBDSnapshot(throttle_pct=150.0)
+    assert obd.throttle_pct == 100.0
+
+
+def test_obd_snapshot_clamps_speed_over_limit():
+    obd = OBDSnapshot(speed_kmh=999.0)
+    assert obd.speed_kmh == 300.0
+
+
+# ── Emergency vehicle bypasses rate limiter ──────────────────────────────────
+
+def test_emergency_bypasses_rate_limit():
+    """Emergency vehicle intervention must always fire, even when rate-limited."""
+    engine = _make_engine(stress_threshold=0.99)  # normal interventions suppressed
+    engine._config.max_interventions_per_minute = 0  # completely block normal interventions
+
+    perception = PerceptionResult(emergency_vehicle_detected=True)
+    obd = OBDSnapshot(speed_kmh=40, rpm=2000, gear=3)
+
+    events = engine.process_frame(obd, perception)
+    emergency_events = [e for e in events if e.event_type == "emergency"]
+    assert len(emergency_events) == 1
+    # Rate-limit counter should NOT be incremented for emergency interventions
+    assert len(engine._recent_interventions) == 0
+
+
+def test_emergency_detected_in_events():
+    engine = _make_engine()
+    perception = PerceptionResult(emergency_vehicle_detected=True)
+    obd = OBDSnapshot(speed_kmh=40, rpm=2000, gear=3)
+    events = engine.process_frame(obd, perception)
+    assert any(e.event_type == "emergency" for e in events)
+

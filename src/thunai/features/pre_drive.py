@@ -34,6 +34,19 @@ class UserAnxietyProfile:
     heavy_vehicle_sensitivity: float = 0.5
     gamified_progress_level: int = 1     # 1 (beginner) – 10 (expert)
 
+    def __post_init__(self) -> None:
+        # Clamp all 0–1 sensitivity scores to prevent route scoring anomalies.
+        for attr in (
+            "overall_score",
+            "night_driving_sensitivity",
+            "highway_sensitivity",
+            "narrow_lane_sensitivity",
+            "heavy_traffic_sensitivity",
+            "heavy_vehicle_sensitivity",
+        ):
+            setattr(self, attr, max(0.0, min(1.0, float(getattr(self, attr)))))
+        self.gamified_progress_level = max(1, min(10, int(self.gamified_progress_level)))
+
 
 @dataclass
 class RouteSegment:

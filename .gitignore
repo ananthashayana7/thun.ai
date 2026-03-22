@@ -116,3 +116,5 @@ models/local/
 .DS_Store
 Thumbs.db
 
+package-lock.json
+backend/node_modules

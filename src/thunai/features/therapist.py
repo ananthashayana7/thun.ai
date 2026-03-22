@@ -29,6 +29,10 @@ Always speak in short, clear sentences. Use a reassuring and non-judgmental tone
 Never suggest the driver is incompetent. Focus on breathing, grounding techniques,
 and small actionable steps. Your responses must be under 100 words."""
 
+# Limit retained turns to avoid unbounded memory use during long sessions.
+# System prompt is always kept; this caps the number of user+assistant turns.
+_MAX_HISTORY_TURNS = 20
+
 _BREATHING_SCRIPT = [
     "Let's take a moment together.",
     "Breathe in slowly through your nose… two… three… four.",
@@ -92,8 +96,18 @@ class AITherapist:
         Generate a therapist response to the driver's message.
 
         Maintains conversation history for contextual responses.
+        History is trimmed to the last ``_MAX_HISTORY_TURNS`` turns so
+        that the session cannot consume unbounded memory.
         """
         self._session_history.append(Message(role="user", content=user_message))
+
+        # Keep system prompt + at most _MAX_HISTORY_TURNS recent messages.
+        if len(self._session_history) > _MAX_HISTORY_TURNS + 1:
+            self._session_history = [
+                self._session_history[0],  # system prompt always retained
+                *self._session_history[-_MAX_HISTORY_TURNS:],
+            ]
+
         response = self._llm.generate(self._session_history)
         self._session_history.append(Message(role="assistant", content=response.text))
         self._voice.speak(response.text)
