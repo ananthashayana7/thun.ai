@@ -72,6 +72,15 @@ def test_local_yaml_override(tmp_path, monkeypatch):
     assert config.app.log_level == "DEBUG"
 
 
+def test_explicit_config_path_loads_single_file(tmp_path):
+    config_file = tmp_path / "custom.yaml"
+    config_file.write_text("app:\n  log_level: WARNING\n")
+
+    config = load_config(config_path=config_file)
+
+    assert config.app.log_level == "WARNING"
+
+
 def test_hardware_defaults():
     config = load_config()
     assert config.hardware.disconnect_timeout_seconds == 2.0

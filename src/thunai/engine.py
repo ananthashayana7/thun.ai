@@ -182,7 +182,7 @@ class ThunaiEngine:
     def get_readiness_report(self):
         """Expose hardware readiness for diagnostics (status CLI / health endpoints)."""
         return self._hardware.assess()
-=======
+
     def get_stack_manifest(self) -> dict[str, Any]:
         """Return the plug-and-play stack manifest for device/backend wiring."""
         return {

@@ -332,17 +332,6 @@ def load_config(
     """
     _load_dotenv()
 
-    config_dir = config_dir or _CONFIG_DIR
-    raw: dict[str, Any] = {}
-
-    for filename in ("default.yaml", "local.yaml"):
-        path = config_dir / filename
-        if path.exists():
-            with open(path) as fh:
-                loaded = yaml.safe_load(fh) or {}
-            raw = _deep_merge(raw, loaded)
-            logger.debug("Loaded config from %s", path)
-=======
     if config_path:
         path = Path(config_path)
         if not path.exists():
