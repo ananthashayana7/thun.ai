@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+import time
 from typing import Optional
 
 from thunai.config import PerceptionConfig
+from thunai.models import DetectedObject, PerceptionFrame
 
 logger = logging.getLogger(__name__)
 
@@ -126,3 +128,49 @@ class ObjectDetector:
             proximity_alert=False,
             frame_timestamp_ms=timestamp_ms,
         )
+
+
+# Developer reference perception stub
+class StubPerception:
+    """Synthetic perception provider returning Pydantic PerceptionFrame."""
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg.get("perception", cfg)
+        self._counter = 0
+        stub_cfg = self.cfg.get("stub", {})
+        self.emergency_interval = max(1, int(stub_cfg.get("frame_rate_hz", 5)))
+
+    @property
+    def provider_name(self) -> str:
+        return "stub"
+
+    def process_frame(self) -> PerceptionFrame:
+        self._counter += 1
+        now = int(time.time() * 1000)
+        emergency = self._counter % self.emergency_interval == 0
+        detections = [
+            DetectedObject(
+                label="car",
+                confidence=0.9,
+                bbox=(0.1, 0.1, 0.3, 0.3),
+                camera="irvm",
+            )
+        ]
+        return PerceptionFrame(
+            timestamp_ms=now,
+            detections=detections,
+            emergency_vehicle=emergency,
+            lane_departure=False,
+            proximity_alert=False,
+        )
+
+    def is_healthy(self) -> bool:
+        return True
+
+
+def build_perception_provider(cfg: dict):
+    perc_cfg = cfg.get("perception") if "perception" in cfg else cfg
+    provider = perc_cfg.get("provider") or perc_cfg.get("backend")
+    if provider == "stub":
+        return StubPerception(perc_cfg)
+    raise ValueError(f"Unknown perception provider: {provider}")

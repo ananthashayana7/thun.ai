@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 from thunai.config import ThunaiConfig, load_config
 from thunai.features.ivis import IVISEngine, OBDSnapshot
@@ -98,6 +99,10 @@ class ThunaiEngine:
         self._session_start = time.monotonic()
         self._session_events.clear()
 
+        # Reset per-session stress history so average/peak are accurate for
+        # this drive only (not contaminated by a previous session).
+        self.ivis.reset_session()
+
         route = self.pre_drive.select_route(origin, destination, profile)
         pep_talk = self.pre_drive.generate_pep_talk(route, profile)
         self._voice.speak(pep_talk)
@@ -141,6 +146,9 @@ class ThunaiEngine:
 
         Call :meth:`PostDriveAnalyser.analyse` on the returned summary to
         generate the full feedback report.
+
+        Uses accurate per-session average and peak stress from the IVIS engine's
+        stress history (not just the instantaneous stress at session end).
         """
         duration = (time.monotonic() - self._session_start) / 60.0 if self._session_start else 0.0
         stall_count = sum(1 for e in self._session_events if e.event_type == "stall")
@@ -148,14 +156,15 @@ class ThunaiEngine:
         summary = DriveSummary(
             duration_minutes=duration,
             distance_km=route.total_distance_km if route else 0.0,
-            average_stress=self.ivis.stress_level,
-            peak_stress=self.ivis.stress_level,
+            average_stress=self.ivis.stress_average,
+            peak_stress=self.ivis.stress_peak,
             stall_count=stall_count,
             ivis_intervention_count=len(self._session_events),
             events=list(self._session_events),
             route_label=route.comfort_label if route else "unknown",
         )
-        logger.info("Drive session ended. Duration=%.1f min, stress=%.2f.", duration, summary.average_stress)
+        logger.info("Drive session ended. Duration=%.1f min, avg_stress=%.2f, peak_stress=%.2f.",
+                    duration, summary.average_stress, summary.peak_stress)
         self._session_start = None
         return summary
 
@@ -173,6 +182,29 @@ class ThunaiEngine:
     def get_readiness_report(self):
         """Expose hardware readiness for diagnostics (status CLI / health endpoints)."""
         return self._hardware.assess()
+=======
+    def get_stack_manifest(self) -> dict[str, Any]:
+        """Return the plug-and-play stack manifest for device/backend wiring."""
+        return {
+            "app": self._config.app.model_dump(),
+            "deployment": self._config.deployment.model_dump(),
+            "providers": self.get_provider_info(),
+            "synthetic_data": self._config.synthetic_data.model_dump(),
+        }
+
+    def export_synthetic_dataset(
+        self,
+        summary: DriveSummary,
+        *,
+        output_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """
+        Build and optionally persist a structured synthetic dataset artifact.
+        """
+        dataset = self.post_drive.build_synthetic_dataset(summary, self._config.synthetic_data)
+        if output_path is not None:
+            dataset.write_json(output_path)
+        return dataset.to_dict()
 
     def _setup_logging(self) -> None:
         logging.basicConfig(

@@ -16,11 +16,11 @@ def test_load_config_returns_thunai_config():
 
 
 def test_default_slm_vlm_voice_are_stub():
-    """On-device providers default to stub so tests work without API keys."""
+    """SLM defaults to stub (on-device, needs local model); VLM uses Gemini; voice uses system TTS."""
     config = load_config()
     assert config.slm.provider == "stub"
-    assert config.vlm.provider == "stub"
-    assert config.voice.provider == "stub"
+    assert config.vlm.provider == "gemini"
+    assert config.voice.provider == "system"
 
 
 def test_default_llm_provider():
@@ -51,6 +51,14 @@ def test_ivis_defaults():
     config = load_config()
     assert 0 < config.ivis.stress_threshold <= 1.0
     assert config.ivis.max_interventions_per_minute > 0
+
+
+def test_stack_defaults_cover_deployment_and_synthetic_data():
+    config = load_config()
+    assert config.deployment.edge_unit == "rv1126"
+    assert config.deployment.local_retention_days == 90
+    assert config.synthetic_data.enabled is True
+    assert config.synthetic_data.target == "slm_finetune"
 
 
 def test_local_yaml_override(tmp_path, monkeypatch):

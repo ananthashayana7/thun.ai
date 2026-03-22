@@ -30,6 +30,15 @@ _STUB_RESPONSES: dict[str, str] = {
     ),
 }
 
+_STRUCTURED_SYNTHETIC_RESPONSE = (
+    '[{"scenario":"A two-wheeler suddenly cuts across your lane near a market road.",'
+    '"trigger":"lane_merge","suggested_response":"Ease off the accelerator, keep a steady lane, and wait for a safe gap."},'
+    '{"scenario":"Traffic compresses quickly near a signal while a bus blocks your right mirror.",'
+    '"trigger":"traffic_compression","suggested_response":"Increase following distance, scan left and right, and brake progressively."},'
+    '{"scenario":"A pedestrian steps off the divider during light rain at dusk.",'
+    '"trigger":"pedestrian","suggested_response":"Reduce speed early, cover the brake, and let the pedestrian clear the road."}]'
+)
+
 
 class StubLLMProvider(BaseLLMProvider):
     """Deterministic LLM for offline testing — no API calls."""
@@ -59,6 +68,9 @@ class StubLLMProvider(BaseLLMProvider):
                 break
         else:
             text = _STUB_RESPONSES["default"]
+
+        if "json array" in last_user and "suggested_response" in last_user:
+            text = _STRUCTURED_SYNTHETIC_RESPONSE
 
         return LLMResponse(
             text=text,

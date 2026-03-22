@@ -13,6 +13,9 @@ const HR_CHARACTERISTIC_UUID = '00002a37-0000-1000-8000-00805f9b34fb';
 
 const HRV_WINDOW_SIZE = 10; // R-R intervals to compute RMSSD
 
+// BleManager must be instantiated (not used statically) per react-native-ble-plx API.
+const manager = new BleManager();
+
 class WatchService {
   constructor() {
     this._device = null;
@@ -27,14 +30,14 @@ class WatchService {
     return new Promise((resolve, reject) => {
       const found = [];
       const timer = setTimeout(() => {
-        BleManager.stopDeviceScan();
+        manager.stopDeviceScan();
         resolve(found);
       }, timeoutMs);
 
-      BleManager.startDeviceScan([HR_SERVICE_UUID], null, (error, device) => {
+      manager.startDeviceScan([HR_SERVICE_UUID], null, (error, device) => {
         if (error) {
           clearTimeout(timer);
-          BleManager.stopDeviceScan();
+          manager.stopDeviceScan();
           reject(error);
           return;
         }
@@ -47,7 +50,7 @@ class WatchService {
 
   async connect(deviceId) {
     try {
-      this._device = await BleManager.connectToDevice(deviceId);
+      this._device = await manager.connectToDevice(deviceId);
       await this._device.discoverAllServicesAndCharacteristics();
       return true;
     } catch (err) {

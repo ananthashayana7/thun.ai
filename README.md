@@ -80,6 +80,9 @@ export THUNAI_SLM_PROVIDER=phi3
 ```bash
 # Check all active providers
 thunai status
+
+# Export the deployment and provider manifest
+thunai manifest
 ```
 
 ---
@@ -93,8 +96,14 @@ pip install -e ".[dev]"
 # Run diagnostics
 thunai status
 
+# Print the plug-and-play stack manifest
+thunai manifest
+
 # Run a simulated drive session (no API keys needed)
 thunai demo
+
+# Generate a structured synthetic dataset artifact
+thunai generate-synthetic --output artifacts/synthetic-data/demo.json
 ```
 
 ### Hardware readiness guardrails
@@ -112,6 +121,15 @@ thunai demo
 | **IVIS** | `features/ivis.py` | Real-time calm interventions |
 | **AI Therapist** | `features/therapist.py` | Parked-only roadside recovery |
 | **Post-Drive** | `features/post_drive.py` | LLM-generated feedback + synthetic scenarios |
+
+---
+
+## Synthetic data and deployment wiring
+
+The repository now includes config-backed `synthetic_data` and `deployment`
+sections in `config/default.yaml`. Together with `ThunaiEngine.get_stack_manifest()`
+and `thunai generate-synthetic`, this makes the Python stack easier to wire into
+mobile, edge, and backend integrations without changing application code.
 
 ---
 

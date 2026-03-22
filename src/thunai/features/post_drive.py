@@ -10,13 +10,17 @@ Pro automatically when the drive was particularly stressful).
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
 
-from thunai.config import PostDriveConfig
+from thunai.config import PostDriveConfig, SyntheticDataConfig
 from thunai.features.ivis import DriveEvent
-from thunai.intelligence.base import BaseLLMProvider, Message
+from thunai.intelligence.base import BaseLLMProvider, LLMProvider, Message
+from thunai.models import DriveReport, DriveSession
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +59,46 @@ class FeedbackReport:
     model_used: str
     stress_score_label: str = "low"  # low | moderate | high
     suggestions: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SyntheticScenario:
+    """Single training sample derived from a stressful drive event."""
+
+    scenario: str
+    trigger: str
+    suggested_response: str
+    source_event: str
+    stress_delta: float
+
+
+@dataclass
+class SyntheticDataset:
+    """Portable synthetic dataset artifact for downstream model training."""
+
+    target: str
+    provider: str
+    model: str
+    samples: list[SyntheticScenario] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target": self.target,
+            "provider": self.provider,
+            "model": self.model,
+            "created_at": self.created_at.isoformat(),
+            "sample_count": len(self.samples),
+            "metadata": self.metadata,
+            "samples": [sample.__dict__ for sample in self.samples],
+        }
+
+    def write_json(self, path: str | Path) -> Path:
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        return output_path
 
 
 class PostDriveAnalyser:
@@ -141,6 +185,52 @@ class PostDriveAnalyser:
         logger.info("Generated %d synthetic scenarios.", len(scenarios))
         return scenarios
 
+    def build_synthetic_dataset(
+        self,
+        summary: DriveSummary,
+        config: SyntheticDataConfig,
+    ) -> SyntheticDataset:
+        """
+        Generate a structured synthetic dataset for downstream SLM/VLM training.
+
+        The returned dataset is transportable as JSON so device and backend
+        pipelines can ingest it without binding directly to an LLM SDK.
+        """
+        dataset = SyntheticDataset(
+            target=config.target,
+            provider=self._llm_flash.provider_name,
+            model=self._llm_flash.model_name,
+            metadata={
+                "route_label": summary.route_label,
+                "average_stress": summary.average_stress,
+                "peak_stress": summary.peak_stress,
+                "duration_minutes": summary.duration_minutes,
+            },
+        )
+
+        if not config.enabled:
+            logger.info("Synthetic data generation is disabled in config.")
+            return dataset
+
+        high_stress_events = [
+            event for event in summary.events if event.stress_delta >= 0.2
+        ][: config.max_events_per_drive]
+
+        for event in high_stress_events:
+            dataset.samples.extend(
+                self._generate_structured_samples(
+                    event,
+                    scenarios_per_event=config.scenarios_per_event,
+                )
+            )
+
+        logger.info(
+            "Built synthetic dataset with %d samples for target=%s.",
+            len(dataset.samples),
+            dataset.target,
+        )
+        return dataset
+
     @staticmethod
     def _build_prompt(summary: DriveSummary) -> str:
         event_types = ", ".join({e.event_type for e in summary.events}) or "none"
@@ -156,3 +246,165 @@ class PostDriveAnalyser:
             f"Route type: {summary.route_label}. "
             "Please provide personalised feedback."
         )
+
+    def _generate_structured_samples(
+        self,
+        event: DriveEvent,
+        *,
+        scenarios_per_event: int,
+    ) -> list[SyntheticScenario]:
+        prompt = (
+            f"Stress event: trigger={event.event_type}, description={event.description}, "
+            f"stress_delta={event.stress_delta:.2f}. Generate a JSON array of "
+            f"{scenarios_per_event} objects with keys scenario, trigger, suggested_response. "
+            "Keep the scenarios grounded in Indian road conditions. Output only JSON."
+        )
+        response = self._llm_flash.generate(
+            [
+                Message(role="system", content=SYNTHETIC_SYSTEM.replace("{count}", str(scenarios_per_event))),
+                Message(role="user", content=prompt),
+            ],
+            max_tokens=800,
+        )
+        return self._parse_structured_samples(
+            response.text,
+            event=event,
+            scenarios_per_event=scenarios_per_event,
+        )
+
+    @staticmethod
+    def _parse_structured_samples(
+        raw_text: str,
+        *,
+        event: DriveEvent,
+        scenarios_per_event: int,
+    ) -> list[SyntheticScenario]:
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError:
+            parsed = [
+                {
+                    "scenario": line.replace("Scenario:", "", 1).strip(),
+                    "trigger": event.event_type,
+                    "suggested_response": "Slow down, breathe steadily, and follow the IVIS prompt.",
+                }
+                for line in raw_text.splitlines()
+                if line.strip().startswith("Scenario:")
+            ]
+
+        samples: list[SyntheticScenario] = []
+        for item in parsed[:scenarios_per_event]:
+            if not isinstance(item, dict):
+                continue
+            scenario = str(item.get("scenario", "")).strip()
+            if not scenario:
+                continue
+            samples.append(
+                SyntheticScenario(
+                    scenario=scenario,
+                    trigger=str(item.get("trigger", event.event_type)).strip() or event.event_type,
+                    suggested_response=(
+                        str(item.get("suggested_response", "")).strip()
+                        or "Slow down, breathe steadily, and follow the IVIS prompt."
+                    ),
+                    source_event=event.description,
+                    stress_delta=event.stress_delta,
+                )
+            )
+        return samples
+
+
+# Developer reference implementation (v1)
+REPORT_SYSTEM = """You are thun.ai's drive analyst.
+Given a JSON telemetry summary, write a warm, encouraging post-drive report.
+Format: 2-3 paragraphs. Total 180-300 words.
+Start with what went well. Mention 1-2 specific stress moments by timestamp.
+End with one concrete suggestion for the next drive.
+Never use clinical language. Use 'you' not 'the driver'.
+"""
+
+SYNTHETIC_SYSTEM = """You generate synthetic driving scenario variants.
+Given a stress event, output a JSON array of {count} variations.
+Each item: {scenario: str, trigger: str, suggested_response: str}.
+Output ONLY the JSON array. No preamble. No markdown fences.
+"""
+
+
+class PostDriveFeature:
+    def __init__(self, cfg: dict, llm: LLMProvider):
+        self.llm = llm
+        self.cfg = cfg["features"]["post_drive"] if "features" in cfg else cfg
+        self.alpha = self.cfg["confidence_score"]["smoothing_alpha"]
+
+    def generate_report(self, session: DriveSession) -> DriveReport:
+        summary = self._build_summary(session)
+        narrative = self.llm.complete(
+            system=REPORT_SYSTEM,
+            user=json.dumps(summary, default=str),
+            max_tokens=512,
+        )
+        confidence_end = self._update_confidence(session)
+        synthetic = []
+        if self.cfg["synthetic_scenarios"]["enabled"]:
+            synthetic = self._generate_synthetic(session)
+        top_triggers = list({e.trigger_type for e in session.stress_events[:3]})
+        return DriveReport(
+            drive_id=session.drive_id,
+            user_id=session.user_id,
+            generated_at=datetime.now(timezone.utc),
+            overall_confidence_score=confidence_end,
+            narrative=narrative,
+            top_triggers=top_triggers,
+            improvement_vs_prev=confidence_end - session.confidence_score_start,
+            synthetic_scenarios=synthetic,
+        )
+
+    def _build_summary(self, session: DriveSession) -> dict:
+        dur = None
+        if session.ended_at and session.started_at:
+            dur = (session.ended_at - session.started_at).seconds // 60
+        return {
+            "drive_id": session.drive_id,
+            "duration_min": dur,
+            "total_interventions": len(session.interventions_fired),
+            "stress_events": [
+                {
+                    "t": e.timestamp_ms,
+                    "severity": e.severity,
+                    "trigger": e.trigger_type,
+                    "score": e.stress_score,
+                }
+                for e in session.stress_events
+            ],
+            "confidence_start": session.confidence_score_start,
+        }
+
+    def _update_confidence(self, session: DriveSession) -> float:
+        severe_count = sum(1 for e in session.stress_events if e.severity >= 3)
+        raw_score = max(0.0, 1.0 - severe_count * 0.15)
+        prev = session.confidence_score_start
+        return round(self.alpha * raw_score + (1 - self.alpha) * prev, 4)
+
+    def _generate_synthetic(self, session: DriveSession) -> list[dict]:
+        min_sev = self.cfg["synthetic_scenarios"]["min_stress_severity"]
+        count = self.cfg["synthetic_scenarios"]["count_per_stress_event"]
+        results = []
+        for event in session.stress_events:
+            if event.severity < min_sev:
+                continue
+            prompt = (
+                f"Stress event: trigger={event.trigger_type}, "
+                f"severity={event.severity}, score={event.stress_score:.2f}."
+            )
+            raw = self.llm.complete(
+                system=SYNTHETIC_SYSTEM.replace("{count}", str(count)),
+                user=prompt,
+                max_tokens=800,
+            )
+            try:
+                results.extend(json.loads(raw))
+            except json.JSONDecodeError:
+                logging.getLogger(__name__).warning(
+                    "Synthetic JSON parse failed for event %s", event.timestamp_ms
+                )
+        return results

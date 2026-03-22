@@ -12,11 +12,31 @@ dist/
 build/
 coverage/
 
-# ─── Environment ─────────────────────────────────────────────────────────────
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+*.egg
+MANIFEST
+.venv
+env/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── Environment & Secrets ───────────────────────────────────────────────────
 .env
 .env.local
 .env.*.local
 backend/.env
+
+# ─── Local config overrides (never commit — may contain API keys) ────────────
+config/local.yaml
 
 # ─── React Native ────────────────────────────────────────────────────────────
 mobile/android/local.properties
@@ -65,54 +85,18 @@ logs/
 *.jks
 google-services.json
 GoogleService-Info.plist
-=======
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-dist/
-*.egg-info/
-.eggs/
-*.egg
-MANIFEST
 
-# Virtual environments
-.env
-.venv
-env/
-venv/
-
-# Environment variables
-.env.local
-.env.*.local
-*.env
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# Logs
-*.log
-logs/
-
-# Data / model artifacts
+# ─── Data / model artifacts ──────────────────────────────────────────────────
 data/raw/
 models/local/
 *.gguf
 *.onnx
 
+
 # OS
 .DS_Store
 Thumbs.db
+
+package-lock.json
+backend/node_modules
 

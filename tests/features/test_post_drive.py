@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from thunai.config import PostDriveConfig
+from thunai.config import PostDriveConfig, SyntheticDataConfig
 from thunai.features.ivis import DriveEvent
-from thunai.features.post_drive import DriveSummary, FeedbackReport, PostDriveAnalyser
+from thunai.features.post_drive import (
+    DriveSummary,
+    FeedbackReport,
+    PostDriveAnalyser,
+    SyntheticDataset,
+)
 from thunai.intelligence.llm import StubLLMProvider
 
 
@@ -77,3 +82,23 @@ def test_synthetic_scenarios_with_events():
     summary = _summary(events=events)
     scenarios = analyser.generate_synthetic_scenarios(summary)
     assert isinstance(scenarios, list)
+
+
+def test_build_synthetic_dataset_returns_structured_samples():
+    analyser = _analyser()
+    events = [
+        DriveEvent("stall", "Engine stalled at traffic light.", stress_delta=0.4),
+        DriveEvent("merge", "A bus merged aggressively from the left.", stress_delta=0.3),
+    ]
+    summary = _summary(events=events)
+    dataset = analyser.build_synthetic_dataset(
+        summary,
+        SyntheticDataConfig(
+            scenarios_per_event=2,
+            max_events_per_drive=1,
+        ),
+    )
+    assert isinstance(dataset, SyntheticDataset)
+    assert dataset.target == "slm_finetune"
+    assert len(dataset.samples) == 2
+    assert all(sample.source_event for sample in dataset.samples)

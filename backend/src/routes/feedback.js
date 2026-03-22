@@ -13,7 +13,7 @@ const {
   generateScenarioVariants,
   generateTherapistResponse,
 } = require('../services/llmService');
-const { query } = require('../db/db');
+const { query, withTransaction } = require('../db/db');
 
 const router = express.Router();
 
@@ -30,7 +30,7 @@ router.post(
     body('sessionId').isString().notEmpty(),
     body('anxietyScoreAvg').isFloat({ min: 0, max: 100 }),
     body('peakStress').isFloat({ min: 0, max: 100 }),
-    body('stressEvents').optional().isArray(),
+    body('stressEvents').optional().isArray({ max: 200 }),
     body('routeMeta').optional().isObject(),
     body('driverProfile').optional().isObject(),
   ],
@@ -66,20 +66,21 @@ router.post(
         generateScenarioVariants(stressEvents || [], driverProfile || {}),
       ]);
 
-      // Cache narrative in DB
-      await query(
-        `UPDATE drive_sessions SET confidence_narrative = $1 WHERE id = $2 AND user_id = $3`,
-        [narrative, sessionId, req.user.userId]
-      );
-
-      // Record confidence trajectory
+      // Persist narrative and confidence trajectory atomically so the DB
+      // is never left in a partially-written state.
       const confidenceScore = Math.max(0, 100 - anxietyScoreAvg);
-      await query(
-        `INSERT INTO confidence_trajectory (user_id, session_id, confidence_score, scenario_variants)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT DO NOTHING`,
-        [req.user.userId, sessionId, confidenceScore, JSON.stringify(scenarios)]
-      );
+      await withTransaction(async (client) => {
+        await client.query(
+          `UPDATE drive_sessions SET confidence_narrative = $1 WHERE id = $2 AND user_id = $3`,
+          [narrative, sessionId, req.user.userId]
+        );
+        await client.query(
+          `INSERT INTO confidence_trajectory (user_id, session_id, confidence_score, scenario_variants)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT DO NOTHING`,
+          [req.user.userId, sessionId, confidenceScore, JSON.stringify(scenarios)]
+        );
+      });
 
       res.json({ narrative, scenarios });
     } catch (err) {
@@ -95,24 +96,25 @@ router.post(
 router.post(
   '/therapist',
   [
-    body('messages').isArray({ min: 1 }).withMessage('messages array required'),
+    body('messages').isArray({ min: 1, max: 20 }).withMessage('messages array required (max 20)'),
     body('messages.*.role').isIn(['user', 'assistant']),
-    body('messages.*.content').isString().notEmpty(),
-    body('systemContext').optional().isString(),
+    body('messages.*.content').isString().notEmpty().isLength({ max: 1000 }),
+    body('systemContext').optional().isString().isLength({ max: 500 }),
   ],
   async (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     try {
-      const { messages, systemContext, driverProfile } = req.body;
+      const { messages, systemContext } = req.body;
 
-      // Sanitise: keep last 10 messages, user-only content
+      // Sanitise: keep last 10 messages, enforce content length
       const safeMessages = messages
         .slice(-10)
         .map((m) => ({ role: m.role, content: String(m.content).slice(0, 1000) }));
 
-      const response = await generateTherapistResponse(safeMessages, systemContext);
+      const safeContext = systemContext ? String(systemContext).slice(0, 500) : undefined;
+      const response = await generateTherapistResponse(safeMessages, safeContext);
       res.json({ response });
     } catch (err) {
       next(err);
