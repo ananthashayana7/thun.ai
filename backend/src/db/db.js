@@ -41,8 +41,31 @@ async function getClient() {
   return pool.connect();
 }
 
+/**
+ * Execute multiple queries atomically inside a transaction.
+ *
+ * @param {function(client): Promise<T>} fn - async function that receives a
+ *   pg client. All queries executed on this client are part of the same
+ *   transaction. Throw (or reject) to trigger an automatic ROLLBACK.
+ * @returns {T} the value returned by `fn`
+ */
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function closePool() {
   await pool.end();
 }
 
-module.exports = { query, getClient, closePool };
+module.exports = { query, getClient, withTransaction, closePool };

@@ -7,6 +7,9 @@ BEGIN;
 -- gen_random_uuid() is built-in from PostgreSQL 13+; no extension needed.
 -- pgcrypto kept for any future encryption helpers.
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- PostGIS is required for accident zone spatial queries (ST_Intersects).
+-- Install PostGIS on your database before running this migration.
+CREATE EXTENSION IF NOT EXISTS "postgis";
 
 -- ─── Users ───────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
@@ -74,6 +77,24 @@ CREATE TABLE IF NOT EXISTS confidence_trajectory (
 );
 
 CREATE INDEX IF NOT EXISTS idx_confidence_user ON confidence_trajectory (user_id, recorded_at DESC);
+
+-- ─── Accident Zones ──────────────────────────────────────────────────────────
+-- Stores known high-risk locations used by the route anxiety scoring service.
+-- Populated externally (e.g. from government NCRB / MORTH accident datasets).
+CREATE TABLE IF NOT EXISTS accident_zones (
+  id          BIGSERIAL PRIMARY KEY,
+  -- PostGIS geometry – geographic coordinates (WGS84 / EPSG:4326)
+  geom        GEOMETRY(Point, 4326) NOT NULL,
+  severity    SMALLINT NOT NULL CHECK (severity BETWEEN 1 AND 5),
+  description TEXT,
+  source      TEXT,            -- data source identifier (e.g. 'MORTH_2023')
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Spatial index for efficient ST_Intersects bounding-box queries.
+CREATE INDEX IF NOT EXISTS idx_accident_zones_geom ON accident_zones USING GIST (geom);
+-- Covering index for severity-filtered queries.
+CREATE INDEX IF NOT EXISTS idx_accident_zones_severity ON accident_zones (severity);
 
 -- ─── Trigger: auto-update users.updated_at ───────────────────────────────────
 CREATE OR REPLACE FUNCTION update_updated_at()

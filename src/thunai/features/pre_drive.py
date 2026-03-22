@@ -10,10 +10,14 @@ Selects the most psychologically comfortable route for the driver based on:
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
+import requests
+
 from thunai.config import PreDriveConfig
+from thunai.models import RouteOption, UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +33,19 @@ class UserAnxietyProfile:
     heavy_traffic_sensitivity: float = 0.5
     heavy_vehicle_sensitivity: float = 0.5
     gamified_progress_level: int = 1     # 1 (beginner) – 10 (expert)
+
+    def __post_init__(self) -> None:
+        # Clamp all 0–1 sensitivity scores to prevent route scoring anomalies.
+        for attr in (
+            "overall_score",
+            "night_driving_sensitivity",
+            "highway_sensitivity",
+            "narrow_lane_sensitivity",
+            "heavy_traffic_sensitivity",
+            "heavy_vehicle_sensitivity",
+        ):
+            setattr(self, attr, max(0.0, min(1.0, float(getattr(self, attr)))))
+        self.gamified_progress_level = max(1, min(10, int(self.gamified_progress_level)))
 
 
 @dataclass
@@ -181,3 +198,77 @@ class PreDriveAdvisor:
                 ],
             ),
         ]
+
+
+# Developer reference implementation (v1)
+class PreDriveFeature:
+    """Peace-of-Mind route selection using Maps API responses."""
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg["features"]["pre_drive"] if "features" in cfg else cfg
+        self.api_key = self.cfg.get("google_maps_api_key")
+        self.max_alt = self.cfg.get("max_route_alternatives", 3)
+        self.weights = self.cfg.get("anxiety_score_weights", {})
+
+    def get_route_options(
+        self, origin: str, destination: str, profile: UserProfile
+    ) -> list[RouteOption]:
+        raw_routes = self._fetch_routes(origin, destination)
+        scores = [self._score_route(r, profile) for r in raw_routes]
+        min_score = min(scores) if scores else 0
+        options = []
+        for i, (route, score) in enumerate(zip(raw_routes, scores)):
+            triggers = self._extract_triggers(route)
+            label = "fastest" if i == 0 else (
+                "peace_of_mind" if score == min_score else f"option_{i+1}"
+            )
+            options.append(
+                RouteOption(
+                    route_id=str(uuid.uuid4()),
+                    label=label,
+                    eta_minutes=route["legs"][0]["duration"]["value"] // 60,
+                    distance_km=route["legs"][0]["distance"]["value"] / 1000,
+                    anxiety_score=round(score, 1),
+                    triggers=triggers,
+                    polyline=route["overview_polyline"]["points"],
+                )
+            )
+        return sorted(options, key=lambda r: r.anxiety_score)
+
+    def _fetch_routes(self, origin: str, destination: str) -> list[dict]:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/directions/json",
+            params={
+                "origin": origin,
+                "destination": destination,
+                "alternatives": "true",
+                "key": self.api_key,
+                "region": "in",
+                "language": "en",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("routes", [])[: self.max_alt]
+
+    def _score_route(self, route: dict, profile: UserProfile) -> float:
+        steps = route["legs"][0]["steps"]
+        highway_merges = sum(
+            1 for s in steps if "merge" in s.get("html_instructions", "").lower()
+        )
+        total_km = route["legs"][0]["distance"]["value"] / 1000
+        merge_score = min(highway_merges / max(total_km, 1), 1.0)
+        highway_weight = self.weights.get("highway_merges", 0) * (
+            1 + profile.anxiety_score.highway_merges
+        )
+        return merge_score * highway_weight * 100
+
+    def _extract_triggers(self, route: dict) -> list[str]:
+        triggers = []
+        for step in route["legs"][0]["steps"]:
+            instr = step.get("html_instructions", "").lower()
+            if "merge" in instr:
+                triggers.append("highway merge")
+            if "narrow" in instr:
+                triggers.append("narrow road")
+        return list(set(triggers))

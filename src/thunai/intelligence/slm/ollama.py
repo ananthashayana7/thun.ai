@@ -18,7 +18,7 @@ import time
 import requests
 
 from thunai.config import OllamaConfig
-from thunai.intelligence.base import BaseSLMProvider, SLMResponse
+from thunai.intelligence.base import BaseSLMProvider, SLMProvider, SLMResponse
 
 logger = logging.getLogger(__name__)
 
@@ -83,3 +83,40 @@ class OllamaSLMProvider(BaseSLMProvider):
             latency_ms=latency_ms,
             metadata={"eval_count": data.get("eval_count", 0)},
         )
+
+
+# Developer reference implementation (v1)
+class OllamaSLM(SLMProvider):
+    provider_name = "ollama"
+
+    def __init__(self, cfg: dict):
+        self.base_url = cfg["base_url"]
+        self.model = cfg["model"]
+        self.timeout = cfg.get("timeout_s", cfg.get("timeout_seconds", 5))
+        self.temp = cfg.get("temperature", 0.3)
+
+    def infer(
+        self, prompt: str, max_tokens: int = 128, temperature: float | None = None
+    ) -> str:
+        resp = requests.post(
+            f"{self.base_url}/api/generate",
+            json={
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature or self.temp,
+                    "num_predict": max_tokens,
+                },
+            },
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()["response"].strip()
+
+    def is_healthy(self) -> bool:
+        try:
+            r = requests.get(f"{self.base_url}/api/tags", timeout=2)
+            return r.status_code == 200
+        except Exception:
+            return False

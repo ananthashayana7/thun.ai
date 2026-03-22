@@ -52,6 +52,11 @@ async function _initSchema(db) {
     );
   `);
 
+  // Index for fast per-session intervention lookups.
+  await db.executeSql(`
+    CREATE INDEX IF NOT EXISTS idx_interventions_session_id ON interventions (session_id);
+  `);
+
   // Purge sessions older than 90 days automatically
   const cutoff = dayjs().subtract(DB.DRIVE_HISTORY_DAYS, 'day').toISOString();
   await db.executeSql(`DELETE FROM drive_sessions WHERE created_at < ?;`, [cutoff]);

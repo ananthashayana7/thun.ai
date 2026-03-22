@@ -10,13 +10,16 @@ Pro automatically when the drive was particularly stressful).
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 from thunai.config import PostDriveConfig
 from thunai.features.ivis import DriveEvent
-from thunai.intelligence.base import BaseLLMProvider, Message
+from thunai.intelligence.base import BaseLLMProvider, LLMProvider, Message
+from thunai.models import DriveReport, DriveSession
 
 logger = logging.getLogger(__name__)
 
@@ -156,3 +159,99 @@ class PostDriveAnalyser:
             f"Route type: {summary.route_label}. "
             "Please provide personalised feedback."
         )
+
+
+# Developer reference implementation (v1)
+REPORT_SYSTEM = """You are thun.ai's drive analyst.
+Given a JSON telemetry summary, write a warm, encouraging post-drive report.
+Format: 2-3 paragraphs. Total 180-300 words.
+Start with what went well. Mention 1-2 specific stress moments by timestamp.
+End with one concrete suggestion for the next drive.
+Never use clinical language. Use 'you' not 'the driver'.
+"""
+
+SYNTHETIC_SYSTEM = """You generate synthetic driving scenario variants.
+Given a stress event, output a JSON array of {count} variations.
+Each item: {scenario: str, trigger: str, suggested_response: str}.
+Output ONLY the JSON array. No preamble. No markdown fences.
+"""
+
+
+class PostDriveFeature:
+    def __init__(self, cfg: dict, llm: LLMProvider):
+        self.llm = llm
+        self.cfg = cfg["features"]["post_drive"] if "features" in cfg else cfg
+        self.alpha = self.cfg["confidence_score"]["smoothing_alpha"]
+
+    def generate_report(self, session: DriveSession) -> DriveReport:
+        summary = self._build_summary(session)
+        narrative = self.llm.complete(
+            system=REPORT_SYSTEM,
+            user=json.dumps(summary, default=str),
+            max_tokens=512,
+        )
+        confidence_end = self._update_confidence(session)
+        synthetic = []
+        if self.cfg["synthetic_scenarios"]["enabled"]:
+            synthetic = self._generate_synthetic(session)
+        top_triggers = list({e.trigger_type for e in session.stress_events[:3]})
+        return DriveReport(
+            drive_id=session.drive_id,
+            user_id=session.user_id,
+            generated_at=datetime.now(timezone.utc),
+            overall_confidence_score=confidence_end,
+            narrative=narrative,
+            top_triggers=top_triggers,
+            improvement_vs_prev=confidence_end - session.confidence_score_start,
+            synthetic_scenarios=synthetic,
+        )
+
+    def _build_summary(self, session: DriveSession) -> dict:
+        dur = None
+        if session.ended_at and session.started_at:
+            dur = (session.ended_at - session.started_at).seconds // 60
+        return {
+            "drive_id": session.drive_id,
+            "duration_min": dur,
+            "total_interventions": len(session.interventions_fired),
+            "stress_events": [
+                {
+                    "t": e.timestamp_ms,
+                    "severity": e.severity,
+                    "trigger": e.trigger_type,
+                    "score": e.stress_score,
+                }
+                for e in session.stress_events
+            ],
+            "confidence_start": session.confidence_score_start,
+        }
+
+    def _update_confidence(self, session: DriveSession) -> float:
+        severe_count = sum(1 for e in session.stress_events if e.severity >= 3)
+        raw_score = max(0.0, 1.0 - severe_count * 0.15)
+        prev = session.confidence_score_start
+        return round(self.alpha * raw_score + (1 - self.alpha) * prev, 4)
+
+    def _generate_synthetic(self, session: DriveSession) -> list[dict]:
+        min_sev = self.cfg["synthetic_scenarios"]["min_stress_severity"]
+        count = self.cfg["synthetic_scenarios"]["count_per_stress_event"]
+        results = []
+        for event in session.stress_events:
+            if event.severity < min_sev:
+                continue
+            prompt = (
+                f"Stress event: trigger={event.trigger_type}, "
+                f"severity={event.severity}, score={event.stress_score:.2f}."
+            )
+            raw = self.llm.complete(
+                system=SYNTHETIC_SYSTEM.replace("{count}", str(count)),
+                user=prompt,
+                max_tokens=800,
+            )
+            try:
+                results.extend(json.loads(raw))
+            except json.JSONDecodeError:
+                logging.getLogger(__name__).warning(
+                    "Synthetic JSON parse failed for event %s", event.timestamp_ms
+                )
+        return results
