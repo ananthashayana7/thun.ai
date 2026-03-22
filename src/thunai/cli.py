@@ -23,10 +23,20 @@ def _cmd_status(args: argparse.Namespace) -> None:
 
     engine = ThunaiEngine.from_config()
     info = engine.get_provider_info()
+    readiness = engine.get_readiness_report()
     print("thun.ai provider status")
     print("─" * 40)
     for key, value in info.items():
         print(f"  {key:<12} {value}")
+    print("\nHardware readiness")
+    print("─" * 40)
+    print(f"  status         {readiness.status}")
+    print(f"  plug_and_play  {readiness.plug_and_play}")
+    print(f"  inputs         {', '.join(readiness.available_inputs) or 'none'}")
+    print(f"  effective      {', '.join(readiness.effective_stress_inputs) or 'none'}")
+    print(f"  latency_guard  {readiness.latency_guard_passed} (budget={readiness.latency_budget_ms}ms)")
+    if readiness.faults:
+        print("  faults         " + "; ".join(readiness.faults))
 
 
 def _cmd_demo(args: argparse.Namespace) -> None:

@@ -166,3 +166,10 @@ backend:
   graph_db_url_env: NEO4J_URI
   graph_db_user_env: NEO4J_USER
   graph_db_password_env: NEO4J_PASSWORD
+
+# ───────────────────────────────────────────────
+# Hardware readiness (edge-first guardrails)
+# ───────────────────────────────────────────────
+hardware:
+  disconnect_timeout_seconds: 2.0    # NFR-R-03: detect hardware loss within 2s
+  latency_budget_ms: 50.0            # HW-NFR-01: end-to-end target < 50ms

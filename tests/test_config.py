@@ -70,3 +70,9 @@ def test_local_yaml_override(tmp_path, monkeypatch):
 
     config = load_config(config_dir=tmp_path)
     assert config.app.log_level == "DEBUG"
+
+
+def test_hardware_defaults():
+    config = load_config()
+    assert config.hardware.disconnect_timeout_seconds == 2.0
+    assert config.hardware.latency_budget_ms == 50.0

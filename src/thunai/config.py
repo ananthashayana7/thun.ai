@@ -202,6 +202,20 @@ class BackendConfig(BaseModel):
     region: str = "ap-south-1"
 
 
+class HardwareConfig(BaseModel):
+    """
+    Hardware readiness + latency guardrails.
+
+    disconnect_timeout_seconds:
+        How long before a sensor is considered disconnected (NFR-R-03: 2s).
+    latency_budget_ms:
+        Max end-to-end latency for IVIS interventions (HW-NFR-01: 50ms target).
+    """
+
+    disconnect_timeout_seconds: float = 2.0
+    latency_budget_ms: float = 50.0
+
+
 class ThunaiConfig(BaseModel):
     app: AppConfig = Field(default_factory=AppConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -217,6 +231,7 @@ class ThunaiConfig(BaseModel):
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     navigation: NavigationConfig = Field(default_factory=NavigationConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
+    hardware: HardwareConfig = Field(default_factory=HardwareConfig)
 
     # Mapping-style access to support dict-like usage in tests/spec
     def __getitem__(self, item: str) -> Any:  # pragma: no cover - thin helper
