@@ -87,10 +87,12 @@ HardwareStatus IVISEngine::init() {
     // ── 2. RKNN NPU – load CV models ────────────────────────────────────────
     std::cout << "[IVISEngine] Loading RKNN models to NPU...\n";
     if (rknn_init(&ctx_yolo_, "yolo_emergency.rknn", 0, 0, nullptr) < 0) {
+        close(socket_can_fd_);
         status.error_msg = "Failed to load yolo_emergency.rknn";
         return status;
     }
     if (rknn_init(&ctx_lane_, "lanenet.rknn", 0, 0, nullptr) < 0) {
+        close(socket_can_fd_);
         rknn_destroy(ctx_yolo_);
         status.error_msg = "Failed to load lanenet.rknn";
         return status;
@@ -116,6 +118,7 @@ HardwareStatus IVISEngine::init() {
     std::cout << "[IVISEngine] Setting up BLE peripheral advertising...\n";
     ble_handle_ = ble_peripheral_init();
     if (ble_handle_ < 0) {
+        close(socket_can_fd_);
         rknn_destroy(ctx_yolo_);
         rknn_destroy(ctx_lane_);
         status.error_msg = "Failed to initialise BLE peripheral";
@@ -128,11 +131,19 @@ HardwareStatus IVISEngine::init() {
     stress_char.properties = BLE_PROP_READ | BLE_PROP_NOTIFY;
     stress_char.value_len  = sizeof(float);
     if (ble_add_characteristic(ble_handle_, &stress_char) < 0) {
+        close(socket_can_fd_);
+        rknn_destroy(ctx_yolo_);
+        rknn_destroy(ctx_lane_);
+        ble_peripheral_deinit(ble_handle_);
         status.error_msg = "Failed to add stress_level BLE characteristic";
         return status;
     }
 
     if (ble_start_advertising(ble_handle_, "IVIS-Edge") < 0) {
+        close(socket_can_fd_);
+        rknn_destroy(ctx_yolo_);
+        rknn_destroy(ctx_lane_);
+        ble_peripheral_deinit(ble_handle_);
         status.error_msg = "Failed to start BLE advertising";
         return status;
     }
@@ -142,6 +153,11 @@ HardwareStatus IVISEngine::init() {
     std::cout << "[IVISEngine] Opening V4L2 camera /dev/video0...\n";
     camera_fd_ = open("/dev/video0", O_RDWR);
     if (camera_fd_ < 0) {
+        close(socket_can_fd_);
+        rknn_destroy(ctx_yolo_);
+        rknn_destroy(ctx_lane_);
+        ble_stop_advertising(ble_handle_);
+        ble_peripheral_deinit(ble_handle_);
         status.error_msg = "Failed to open /dev/video0";
         return status;
     }
@@ -154,6 +170,11 @@ HardwareStatus IVISEngine::init() {
     fmt.fmt.pix.field       = V4L2_FIELD_NONE;
     if (ioctl(camera_fd_, VIDIOC_S_FMT, &fmt) < 0) {
         close(camera_fd_);
+        close(socket_can_fd_);
+        rknn_destroy(ctx_yolo_);
+        rknn_destroy(ctx_lane_);
+        ble_stop_advertising(ble_handle_);
+        ble_peripheral_deinit(ble_handle_);
         status.error_msg = "Failed to set V4L2 format 640x480 NV12";
         return status;
     }
@@ -164,6 +185,11 @@ HardwareStatus IVISEngine::init() {
     parm.parm.capture.timeperframe.denominator = 30;
     if (ioctl(camera_fd_, VIDIOC_S_PARM, &parm) < 0) {
         close(camera_fd_);
+        close(socket_can_fd_);
+        rknn_destroy(ctx_yolo_);
+        rknn_destroy(ctx_lane_);
+        ble_stop_advertising(ble_handle_);
+        ble_peripheral_deinit(ble_handle_);
         status.error_msg = "Failed to set V4L2 framerate to 30 fps";
         return status;
     }
