@@ -5,7 +5,6 @@
 
 #include <gtest/gtest.h>
 #include "../src/stress_index.h"
-#include "../src/stress_index.cpp" // Simple inclusion for standalone test compilation
 
 namespace ivis {
 

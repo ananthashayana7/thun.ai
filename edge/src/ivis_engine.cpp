@@ -15,6 +15,17 @@
 #include <iostream>
 #include <algorithm>
 
+#ifdef IVIS_REAL_HARDWARE
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <unistd.h>
+#include <linux/can.h>
+#include <linux/can/raw.h>
+#include <linux/videodev2.h>
+#include <fcntl.h>
+#endif
+
 namespace ivis {
 
 // ─── Constructor / Destructor ─────────────────────────────────────────────────
@@ -33,39 +44,158 @@ IVISEngine::~IVISEngine() {
 
 // ─── Init / Shutdown ──────────────────────────────────────────────────────────
 
-bool IVISEngine::init() {
-    bool success = true;
+HardwareStatus IVISEngine::init() {
+    HardwareStatus status;
 
-#ifdef RV1126_PROD
-    // 1. Initialize CAN Bus (SocketCAN)
+#ifdef IVIS_REAL_HARDWARE
+    // ── 1. CAN Bus (SocketCAN on can0) ───────────────────────────────────────
     std::cout << "[IVISEngine] Initializing SocketCAN (can0)...\n";
-    // system("ip link set can0 type can bitrate 500000");
-    // system("ip link set can0 up");
-    // socket_can_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-    
-    // 2. Initialize RKNN NPU for CV models (YOLO, LaneNet)
-    std::cout << "[IVISEngine] Loading RKNN models to NPU...\n";
-    // rknn_init(&ctx_yolo, "yolo_emergency.rknn", 0, 0, NULL);
-    // rknn_init(&ctx_lane, "lanenet.rknn", 0, 0, NULL);
+    if (system("ip link set can0 type can bitrate 500000") != 0) {
+        status.error_msg = "Failed to set CAN bitrate on can0";
+        return status;
+    }
+    if (system("ip link set can0 up") != 0) {
+        status.error_msg = "Failed to bring up can0";
+        return status;
+    }
 
-    // 3. Start BLE Scan for biometric packets
-    std::cout << "[IVISEngine] Starting BLE GATT client for smartwatch synchronization...\n";
-    // gatt_client_init();
+    socket_can_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+    if (socket_can_fd_ < 0) {
+        status.error_msg = "Failed to open CAN socket";
+        return status;
+    }
+
+    struct ifreq ifr{};
+    std::strncpy(ifr.ifr_name, "can0", IFNAMSIZ - 1);
+    if (ioctl(socket_can_fd_, SIOCGIFINDEX, &ifr) < 0) {
+        close(socket_can_fd_);
+        status.error_msg = "ioctl SIOCGIFINDEX failed for can0";
+        return status;
+    }
+
+    struct sockaddr_can addr{};
+    addr.can_family  = AF_CAN;
+    addr.can_ifindex = ifr.ifr_ifindex;
+    if (bind(socket_can_fd_, reinterpret_cast<struct sockaddr*>(&addr),
+             sizeof(addr)) < 0) {
+        close(socket_can_fd_);
+        status.error_msg = "Failed to bind CAN socket to can0";
+        return status;
+    }
+    std::cout << "[IVISEngine] CAN socket bound to can0\n";
+
+    // ── 2. RKNN NPU – load CV models ────────────────────────────────────────
+    std::cout << "[IVISEngine] Loading RKNN models to NPU...\n";
+    if (rknn_init(&ctx_yolo_, "yolo_emergency.rknn", 0, 0, nullptr) < 0) {
+        status.error_msg = "Failed to load yolo_emergency.rknn";
+        return status;
+    }
+    if (rknn_init(&ctx_lane_, "lanenet.rknn", 0, 0, nullptr) < 0) {
+        rknn_destroy(ctx_yolo_);
+        status.error_msg = "Failed to load lanenet.rknn";
+        return status;
+    }
+
+    // Warm up: run a dummy inference to pre-fill NPU caches
+    rknn_input warmup_input{};
+    warmup_input.index = 0;
+    warmup_input.size  = 640 * 480 * 3;
+    std::vector<uint8_t> dummy_buf(warmup_input.size, 0);
+    warmup_input.buf   = dummy_buf.data();
+    warmup_input.type  = RKNN_TENSOR_UINT8;
+    warmup_input.fmt   = RKNN_TENSOR_NHWC;
+    rknn_inputs_set(ctx_yolo_, 1, &warmup_input);
+    rknn_output warmup_out{};
+    warmup_out.want_float = 1;
+    rknn_run(ctx_yolo_, nullptr);
+    rknn_outputs_get(ctx_yolo_, 1, &warmup_out, nullptr);
+    rknn_outputs_release(ctx_yolo_, 1, &warmup_out);
+    std::cout << "[IVISEngine] RKNN NPU warm-up complete\n";
+
+    // ── 3. BLE peripheral – stress_level characteristic ──────────────────────
+    std::cout << "[IVISEngine] Setting up BLE peripheral advertising...\n";
+    ble_handle_ = ble_peripheral_init();
+    if (ble_handle_ < 0) {
+        rknn_destroy(ctx_yolo_);
+        rknn_destroy(ctx_lane_);
+        status.error_msg = "Failed to initialise BLE peripheral";
+        return status;
+    }
+
+    // Register stress_level GATT characteristic (UUID 0x2A56)
+    ble_characteristic_t stress_char{};
+    stress_char.uuid       = 0x2A56;
+    stress_char.properties = BLE_PROP_READ | BLE_PROP_NOTIFY;
+    stress_char.value_len  = sizeof(float);
+    if (ble_add_characteristic(ble_handle_, &stress_char) < 0) {
+        status.error_msg = "Failed to add stress_level BLE characteristic";
+        return status;
+    }
+
+    if (ble_start_advertising(ble_handle_, "IVIS-Edge") < 0) {
+        status.error_msg = "Failed to start BLE advertising";
+        return status;
+    }
+    std::cout << "[IVISEngine] BLE advertising as IVIS-Edge\n";
+
+    // ── 4. Camera (V4L2) – 640×480 @ 30 fps ─────────────────────────────────
+    std::cout << "[IVISEngine] Opening V4L2 camera /dev/video0...\n";
+    camera_fd_ = open("/dev/video0", O_RDWR);
+    if (camera_fd_ < 0) {
+        status.error_msg = "Failed to open /dev/video0";
+        return status;
+    }
+
+    struct v4l2_format fmt{};
+    fmt.type                = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    fmt.fmt.pix.width       = 640;
+    fmt.fmt.pix.height      = 480;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
+    fmt.fmt.pix.field       = V4L2_FIELD_NONE;
+    if (ioctl(camera_fd_, VIDIOC_S_FMT, &fmt) < 0) {
+        close(camera_fd_);
+        status.error_msg = "Failed to set V4L2 format 640x480 NV12";
+        return status;
+    }
+
+    struct v4l2_streamparm parm{};
+    parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    parm.parm.capture.timeperframe.numerator   = 1;
+    parm.parm.capture.timeperframe.denominator = 30;
+    if (ioctl(camera_fd_, VIDIOC_S_PARM, &parm) < 0) {
+        close(camera_fd_);
+        status.error_msg = "Failed to set V4L2 framerate to 30 fps";
+        return status;
+    }
+    std::cout << "[IVISEngine] Camera configured: 640x480 NV12 @ 30 fps\n";
+
 #else
-    // Hardware initialisation is platform-specific.
-    // On RV1126 production builds, this opens the CAN socket,
-    // initialises the RKNN NPU for CV inference, and starts the BLE scan.
+    // Desktop / simulation mode – no real hardware
     std::cout << "[IVISEngine] init() – running in software simulation mode\n";
 #endif
 
-    return success;
+    status.success = true;
+    return status;
 }
 
 void IVISEngine::shutdown() {
-#ifdef RV1126_PROD
-    // system("ip link set can0 down");
-    // rknn_destroy(ctx_yolo);
-    // rknn_destroy(ctx_lane);
+#ifdef IVIS_REAL_HARDWARE
+    if (socket_can_fd_ >= 0) {
+        close(socket_can_fd_);
+        socket_can_fd_ = -1;
+    }
+    system("ip link set can0 down");
+    rknn_destroy(ctx_yolo_);
+    rknn_destroy(ctx_lane_);
+    if (ble_handle_ >= 0) {
+        ble_stop_advertising(ble_handle_);
+        ble_peripheral_deinit(ble_handle_);
+        ble_handle_ = -1;
+    }
+    if (camera_fd_ >= 0) {
+        close(camera_fd_);
+        camera_fd_ = -1;
+    }
 #endif
     std::cout << "[IVISEngine] shutdown\n";
 }
@@ -81,7 +211,7 @@ EngineOutput IVISEngine::tick(
     const BiometricPacket& bio,
     const CameraFrame*     frame
 ) {
-    const auto t_start = std::chrono::steady_clock::now();
+    const auto t_start = std::chrono::high_resolution_clock::now();
 
     last_obd_ = obd;
     last_bio_ = bio;
@@ -126,9 +256,10 @@ EngineOutput IVISEngine::tick(
     out.severity     = result.severity;
     std::strncpy(out.message, result.message.c_str(), sizeof(out.message) - 1);
 
-    // ── Latency guard ─────────────────────────────────────────────────────────
-    const auto t_end = std::chrono::steady_clock::now();
+    // ── Latency instrumentation ─────────────────────────────────────────────
+    const auto t_end = std::chrono::high_resolution_clock::now();
     const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
+    out.tick_latency_us = static_cast<uint32_t>(elapsed_us);
     if (elapsed_us > 45'000) { // 45 ms warning threshold (target < 50 ms)
         std::cerr << "[IVISEngine] WARNING: tick latency " << elapsed_us << " us\n";
     }
@@ -191,8 +322,9 @@ bool IVISEngine::isStationary() const {
 
 int main() {
     ivis::IVISEngine engine;
-    if (!engine.init()) {
-        std::cerr << "Init failed\n";
+    auto hw = engine.init();
+    if (!hw.success) {
+        std::cerr << "Init failed: " << hw.error_msg << "\n";
         return 1;
     }
 

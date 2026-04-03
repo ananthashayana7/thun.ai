@@ -14,6 +14,12 @@
 
 namespace ivis {
 
+/** Result of hardware initialization */
+struct HardwareStatus {
+    bool        success   { false };
+    std::string error_msg;
+};
+
 /** Camera frame descriptor (GMSL2 input) */
 struct CameraFrame {
     const uint8_t* data;       ///< Raw frame bytes (NV12 or RGB)
@@ -37,6 +43,7 @@ struct EngineOutput {
     uint8_t          severity;        ///< 1–5
     float            stress_index;    ///< 0–100
     bool             emergency_override;
+    uint32_t         tick_latency_us; ///< Tick processing time in microseconds
     char             message[128];    ///< Human-readable reason
 };
 
@@ -47,8 +54,8 @@ public:
     IVISEngine();
     ~IVISEngine();
 
-    /** Initialise hardware I/O (CAN bus, camera, BLE). Returns true on success. */
-    bool init();
+    /** Initialise hardware I/O (CAN bus, camera, BLE). */
+    HardwareStatus init();
 
     /** Shut down all I/O gracefully. */
     void shutdown();

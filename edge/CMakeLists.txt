@@ -47,3 +47,50 @@ install(FILES
   src/intervention_dispatcher.h
   DESTINATION include/ivis
 )
+
+# ─── Google Test via FetchContent ─────────────────────────────────────────────
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  GIT_REPOSITORY https://github.com/google/googletest.git
+  GIT_TAG v1.14.0
+)
+# Prevent GoogleTest from overriding our compiler/linker settings on Windows
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+# ── Shared sources (non-main) for test linking ────────────────────────────────
+set(IVIS_LIB_SOURCES
+  src/obd_parser.cpp
+  src/stress_index.cpp
+  src/intervention_dispatcher.cpp
+)
+
+# ── Test: OBD Parser ─────────────────────────────────────────────────────────
+add_executable(test_obd_parser
+  test/test_obd_parser.cpp
+  ${IVIS_LIB_SOURCES}
+)
+target_include_directories(test_obd_parser PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_obd_parser PRIVATE GTest::gtest)
+add_test(NAME OBDParserTests COMMAND test_obd_parser)
+
+# ── Test: Stress Index ───────────────────────────────────────────────────────
+add_executable(test_stress_index
+  test/stress_index_test.cpp
+  src/stress_index.cpp
+)
+target_include_directories(test_stress_index PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_stress_index PRIVATE GTest::gtest)
+add_test(NAME StressIndexTests COMMAND test_stress_index)
+
+# ── Test: Intervention Dispatcher ────────────────────────────────────────────
+add_executable(test_intervention_dispatcher
+  test/test_intervention_dispatcher.cpp
+  ${IVIS_LIB_SOURCES}
+)
+target_include_directories(test_intervention_dispatcher PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(test_intervention_dispatcher PRIVATE GTest::gtest)
+add_test(NAME InterventionDispatcherTests COMMAND test_intervention_dispatcher)
