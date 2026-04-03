@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Thun.AI | Production-Ready IVIS Platform</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark-mode">
+    <div class="glow-container">
+        <div class="glow-circle blue"></div>
+        <div class="glow-circle green"></div>
+    </div>
+
+    <nav class="glass-header">
+        <div class="logo">THUN<span>.AI</span></div>
+        <div class="status-badge" id="global-status">
+            <span class="status-dot green"></span> 55-65% Production-Ready
+        </div>
+        <div class="nav-links">
+            <a href="#architecture">Architecture</a>
+            <a href="#simulation">Live Simulation</a>
+            <a href="#readiness">Readiness Gap</a>
+        </div>
+    </nav>
+
+    <main>
+        <section id="hero">
+            <h1 class="gradient-text">Production Readiness Audit</h1>
+            <p>From PoC to OEM-Grade: Hardening the In-Vehicle Intervention System</p>
+            <div class="hero-stats">
+                <div class="stat-card">
+                    <h3>37.5%</h3>
+                    <p>Total Requirements</p>
+                </div>
+                <div class="stat-card">
+                    <h3>2/3</h3>
+                    <p>FTE-Months to 100%</p>
+                </div>
+                <div class="stat-card">
+                    <h3>< 50ms</h3>
+                    <p>Edge Latency SLA</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="architecture" class="glass-card">
+            <h2>System Architecture & Data Flow</h2>
+            <div class="arch-container">
+                <div class="node mobile">
+                    <span class="node-icon">📱</span>
+                    <strong>Mobile App</strong>
+                    <div class="flow-lines"></div>
+                </div>
+                <div class="connector">
+                    <div class="signal"></div>
+                </div>
+                <div class="node edge">
+                    <span class="node-icon">🛰️</span>
+                    <strong>Edge Logic (RV1126)</strong>
+                    <div class="flow-lines"></div>
+                </div>
+                <div class="connector invert">
+                    <div class="signal"></div>
+                </div>
+                <div class="node backend">
+                    <span class="node-icon">☁️</span>
+                    <strong>Cloud Backend</strong>
+                    <p>Gemini • Claude • OpenAI</p>
+                </div>
+            </div>
+            <div class="flow-labels">
+                <span class="label">OBD-2 (5Hz)</span>
+                <span class="label">Interventions (< 50ms)</span>
+                <span class="label">Feedback (Narrative)</span>
+            </div>
+        </section>
+
+        <section id="simulation" class="glass-card">
+            <div class="sim-header">
+                <h2>Live Stress Simulation</h2>
+                <div class="sim-controls">
+                    <button id="scenario-normal">Normal Traffic</button>
+                    <button id="scenario-highway">Highway Merge</button>
+                    <button id="scenario-emergency">Emergency Vehicle</button>
+                </div>
+            </div>
+            <div class="sim-layout">
+                <div class="gauges">
+                    <div class="gauge-card">
+                        <label>OBD Speed (km/h)</label>
+                        <div class="gauge-val" id="val-speed">60</div>
+                        <div class="progress-bar"><div id="bar-speed" style="width: 60%"></div></div>
+                    </div>
+                    <div class="gauge-card">
+                        <label>Heart Rate (BPM)</label>
+                        <div class="gauge-val" id="val-hr">78</div>
+                        <div class="progress-bar"><div id="bar-hr" style="width: 39%"></div></div>
+                    </div>
+                    <div class="gauge-card accent">
+                        <label>STRESS INDEX (CSI)</label>
+                        <div class="gauge-val large" id="val-csi">20</div>
+                        <div class="progress-bar thick"><div id="bar-csi" style="width: 20%"></div></div>
+                    </div>
+                </div>
+                <div class="intervention-log">
+                    <h3>Dispatched Interventions</h3>
+                    <ul id="log-list">
+                        <li><span class="log-time">10:00:00</span> <span class="log-msg">System Initialized...</span></li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="readiness" class="glass-card">
+            <h2>The Road to 100% (GAP Analysis)</h2>
+            <div class="requirements-grid" id="req-grid">
+                <!-- Requirements will be dynamically populated -->
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <div class="footer-logo">THUN.AI</div>
+            <p>Aesthetically engineered for automotive-grade reliability.</p>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>

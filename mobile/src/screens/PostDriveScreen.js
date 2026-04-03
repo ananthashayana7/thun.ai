@@ -8,8 +8,8 @@ import {
   View, Text, StyleSheet, SafeAreaView, ScrollView,
   ActivityIndicator, TouchableOpacity,
 } from 'react-native';
-import axios from 'axios';
 import LocalStorage from '../services/LocalStorage';
+import SyncService from '../services/SyncService';
 import { COLORS, STRESS, API } from '../utils/constants';
 import { useAnxietyProfileStore } from '../store/anxietyProfile';
 import dayjs from 'dayjs';
@@ -17,21 +17,51 @@ import dayjs from 'dayjs';
 export default function PostDriveScreen({ navigation, route: navRoute }) {
   const { sessionId, routeMeta, fromHistory } = navRoute.params ?? {};
   const { profile, updateThresholds } = useAnxietyProfileStore();
+  const feedbackRequestKey = sessionId ? `feedback.generate.${sessionId}` : null;
 
   const [session, setSession] = useState(null);
   const [narrative, setNarrative] = useState(null);
   const [scenarios, setScenarios] = useState([]);
   const [loading, setLoading] = useState(true);
   const [feedbackError, setFeedbackError] = useState(null);
+  const [feedbackPending, setFeedbackPending] = useState(false);
 
   useEffect(() => {
     if (sessionId) loadSession();
   }, [sessionId]);
 
+  useEffect(() => {
+    if (!feedbackRequestKey) return undefined;
+
+    const unsubscribe = SyncService.subscribe(feedbackRequestKey, (event) => {
+      if (event.status === 'completed') {
+        setNarrative(event.data?.narrative ?? null);
+        setScenarios(event.data?.scenarios ?? []);
+        setFeedbackPending(false);
+        setFeedbackError(null);
+      }
+
+      if (event.status === 'queued') {
+        setFeedbackPending(true);
+        setFeedbackError('Feedback request queued. It will complete automatically when the connection returns.');
+      }
+    });
+
+    return unsubscribe;
+  }, [feedbackRequestKey]);
+
   const loadSession = async () => {
     setLoading(true);
     const data = await LocalStorage.getDriveSession(sessionId);
     setSession(data);
+
+    if (feedbackRequestKey) {
+      const cachedFeedback = await SyncService.getCachedResult(feedbackRequestKey);
+      if (cachedFeedback?.responseData) {
+        setNarrative(cachedFeedback.responseData.narrative ?? null);
+        setScenarios(cachedFeedback.responseData.scenarios ?? []);
+      }
+    }
 
     if (!fromHistory) {
       // Adaptive threshold calibration based on this session
@@ -42,18 +72,24 @@ export default function PostDriveScreen({ navigation, route: navRoute }) {
         const updated = Math.round(currentTrigger * 0.8 + newBaseline * 0.2 + 5);
         await updateThresholds({ stressIndexTrigger: Math.min(85, Math.max(40, updated)) });
       }
-      // Request LLM feedback from backend
+    }
+
+    if (!fromHistory || !narrative) {
       await fetchFeedback(data);
     }
+
     setLoading(false);
   };
 
   const fetchFeedback = async (sessionData) => {
-    if (!sessionData) return;
+    if (!sessionData || !feedbackRequestKey) return;
+
     try {
-      const resp = await axios.post(
-        `${API.BASE_URL}/feedback/generate`,
-        {
+      const result = await SyncService.request({
+        requestKey: feedbackRequestKey,
+        method: 'POST',
+        url: `${API.BASE_URL}/feedback/generate`,
+        body: {
           sessionId,
           anxietyScoreAvg: sessionData.anxiety_score_avg,
           peakStress: sessionData.peak_stress,
@@ -64,10 +100,23 @@ export default function PostDriveScreen({ navigation, route: navRoute }) {
             thresholds: profile?.thresholds,
           },
         },
-        { timeout: 35_000 }
-      );
-      setNarrative(resp.data?.narrative);
-      setScenarios(resp.data?.scenarios ?? []);
+        timeout: 35_000,
+        cacheOnSuccess: true,
+        queueIfOffline: true,
+        dedupeCompleted: true,
+      });
+
+      if (result.status === 'success') {
+        setNarrative(result.data?.narrative ?? null);
+        setScenarios(result.data?.scenarios ?? []);
+        setFeedbackPending(false);
+        setFeedbackError(null);
+      }
+
+      if (result.status === 'queued') {
+        setFeedbackPending(true);
+        setFeedbackError('Feedback request queued. It will complete automatically when the connection returns.');
+      }
     } catch (err) {
       setFeedbackError('Could not generate AI feedback. Please check your connection.');
     }
@@ -122,6 +171,11 @@ export default function PostDriveScreen({ navigation, route: navRoute }) {
 
         {/* AI Narrative */}
         <Text style={styles.sectionTitle}>Confidence Report</Text>
+        {feedbackPending && (
+          <View style={styles.pendingBanner}>
+            <Text style={styles.pendingText}>Queued for sync. Keep the app online and this report will populate automatically.</Text>
+          </View>
+        )}
         {feedbackError ? (
           <Text style={styles.error}>{feedbackError}</Text>
         ) : narrative ? (
@@ -188,6 +242,13 @@ const styles = StyleSheet.create({
   narrativeText: { fontSize: 15, color: COLORS.text, lineHeight: 24 },
   loadingText: { color: COLORS.textSecondary, marginTop: 8 },
   error: { color: COLORS.danger, marginBottom: 16 },
+  pendingBanner: {
+    backgroundColor: `${COLORS.warning}22`,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  pendingText: { color: COLORS.warning, fontSize: 13, lineHeight: 18 },
   scenarioCard: {
     backgroundColor: COLORS.surface,
     borderRadius: 12,

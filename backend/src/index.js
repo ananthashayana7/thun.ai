@@ -11,7 +11,10 @@ const helmet = require('helmet');
 const cors = require('cors');
 const morgan = require('morgan');
 
-const { createRateLimiter } = require('./middleware/rateLimiter');
+const requestIdMiddleware = require('./middleware/requestId');
+const { auditContextMiddleware } = require('./middleware/audit');
+const { initRedis } = require('./db/redis');
+const { globalRateLimiter } = require('./middleware/rateLimiter');
 const authMiddleware = require('./middleware/auth');
 const authRoutes = require('./routes/auth');
 const driveRoutes = require('./routes/drive');
@@ -37,8 +40,14 @@ app.use(cors({
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
 }));
+
+// ─── Request ID middleware (for tracing) ──────────────────────────────────────
+app.use(requestIdMiddleware);
+
+// ─── Audit context middleware (for audit logging) ───────────────────────────────
+app.use(auditContextMiddleware);
 
 // ─── Body parsing ─────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '2mb' }));
@@ -49,15 +58,21 @@ if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('combined'));
 }
 
-// ─── Global rate limiter ──────────────────────────────────────────────────────
-app.use(createRateLimiter({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
-  max: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
-}));
+// ─── Global rate limiter (100 req/min per user/IP) ──────────────────────────────────────
+app.use(globalRateLimiter);
 
-// ─── Health check ─────────────────────────────────────────────────────────────
+// ─── Health check (NOT rate limited) ──────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', ts: new Date().toISOString() });
+});
+
+// ─── Health check (deep) - checks dependencies ─────────────────────────────────
+app.get('/health/providers', (_req, res) => {
+  const { getCircuitBreakerStatus } = require('./services/llmService');
+  res.json({
+    status: 'ok',
+    providers: getCircuitBreakerStatus(),
+  });
 });
 
 // ─── Public routes ────────────────────────────────────────────────────────────
@@ -75,16 +90,46 @@ app.use((_req, res) => {
 
 // ─── Global error handler ─────────────────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
-  console.error('[Error]', err.message);
-  const status = err.status || 500;
-  res.status(status).json({ error: err.message || 'Internal server error' });
+app.use((err, req, res, _next) => {
+  console.error(`[${req.id}] Error: ${err.message}`);
+  
+  // Sanitize error response (don't leak secrets)
+  let status = err.status || 500;
+  let message = err.message;
+  
+  if (status === 500) {
+    message = 'Internal server error';
+  }
+  
+  res.status(status).json({
+    error: message,
+    request_id: req.id,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
+async function start() {
+  try {
+    // Initialize Redis (with fallback to in-memory)
+    await initRedis();
+    console.log('[Redis] Initialized');
+  } catch (err) {
+    console.error('[Redis] Failed to initialize:', err.message);
+  }
+
+  if (require.main === module) {
+    app.listen(PORT, () => {
+      console.log(`[thun.ai backend] listening on port ${PORT} (${process.env.NODE_ENV})`);
+    });
+  }
+}
+
+// Only start if this is the main module (not imported for tests)
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`[thun.ai backend] listening on port ${PORT} (${process.env.NODE_ENV})`);
+  start().catch((err) => {
+    console.error('[Startup] Fatal error:', err);
+    process.exit(1);
   });
 }
 

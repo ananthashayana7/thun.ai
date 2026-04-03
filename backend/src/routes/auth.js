@@ -71,6 +71,19 @@ router.post(
         { expiresIn: process.env.JWT_EXPIRY || '7d' }
       );
 
+      // Audit log successful sign-in
+      await query(
+        `INSERT INTO audit_log (user_id, action, resource_type, resource_id, new_values)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          user.id,
+          'USER_SIGNIN',
+          'user',
+          user.id,
+          JSON.stringify({ email: user.email, timestamp: new Date().toISOString() }),
+        ]
+      );
+
       res.json({
         token: `thun_${token}`,
         user: {
@@ -107,6 +120,20 @@ router.put(
          WHERE id = $3`,
         [JSON.stringify(anxietyProfile), ttsLanguage || null, req.user.userId]
       );
+
+      // Audit log profile update
+      await query(
+        `INSERT INTO audit_log (user_id, action, resource_type, resource_id, new_values)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          req.user.userId,
+          'USER_PROFILE_UPDATED',
+          'user',
+          req.user.userId,
+          JSON.stringify({ ttsLanguage, hasAnxietyProfile: !!anxietyProfile }),
+        ]
+      );
+
       res.json({ success: true });
     } catch (err) {
       next(err);

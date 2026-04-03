@@ -17,6 +17,7 @@ import time
 
 import requests
 
+from thunai.circuit_breaker import get_breaker
 from thunai.config import OllamaConfig
 from thunai.intelligence.base import BaseSLMProvider, SLMProvider, SLMResponse
 
@@ -28,6 +29,7 @@ class OllamaSLMProvider(BaseSLMProvider):
 
     def __init__(self, config: OllamaConfig) -> None:
         self._config = config
+        self.breaker = get_breaker("ollama", failure_threshold=5, timeout=300)
 
     @property
     def provider_name(self) -> str:
@@ -48,6 +50,20 @@ class OllamaSLMProvider(BaseSLMProvider):
             return False
 
     def generate(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 128,
+        temperature: float = 0.3,
+    ) -> SLMResponse:
+        return self.breaker.call(
+            self._do_generate,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    def _do_generate(
         self,
         prompt: str,
         *,
@@ -94,8 +110,19 @@ class OllamaSLM(SLMProvider):
         self.model = cfg["model"]
         self.timeout = cfg.get("timeout_s", cfg.get("timeout_seconds", 5))
         self.temp = cfg.get("temperature", 0.3)
+        self.breaker = get_breaker("ollama", failure_threshold=5, timeout=300)
 
     def infer(
+        self, prompt: str, max_tokens: int = 128, temperature: float | None = None
+    ) -> str:
+        return self.breaker.call(
+            self._do_infer,
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    def _do_infer(
         self, prompt: str, max_tokens: int = 128, temperature: float | None = None
     ) -> str:
         resp = requests.post(

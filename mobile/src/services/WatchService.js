@@ -12,6 +12,7 @@ const HR_SERVICE_UUID = '0000180d-0000-1000-8000-00805f9b34fb';
 const HR_CHARACTERISTIC_UUID = '00002a37-0000-1000-8000-00805f9b34fb';
 
 const HRV_WINDOW_SIZE = 10; // R-R intervals to compute RMSSD
+const MAX_RECONNECT_DELAY_MS = 30000;
 
 // BleManager must be instantiated (not used statically) per react-native-ble-plx API.
 const manager = new BleManager();
@@ -19,11 +20,18 @@ const manager = new BleManager();
 class WatchService {
   constructor() {
     this._device = null;
+    this._deviceId = null;
     this._subscription = null;
     this._rrIntervals = [];
     this._listeners = [];
+    this._connectionListeners = [];
     this._currentHR = null;
     this._currentHRV = null;
+    this._reconnectTimer = null;
+    this._reconnectAttempts = 0;
+    this._isConnected = false;
+    this._isReconnecting = false;
+    this._manualDisconnect = false;
   }
 
   async scan(timeoutMs = 10000) {
@@ -50,11 +58,19 @@ class WatchService {
 
   async connect(deviceId) {
     try {
+      this._manualDisconnect = false;
+      this._deviceId = deviceId;
       this._device = await manager.connectToDevice(deviceId);
       await this._device.discoverAllServicesAndCharacteristics();
+      this._reconnectAttempts = 0;
+      this._isConnected = true;
+      this._isReconnecting = false;
+      this._emitConnectionState('connected');
       return true;
     } catch (err) {
       console.error('[WatchService] connect error:', err);
+      this._isConnected = false;
+      this._emitConnectionState('disconnected', err);
       return false;
     }
   }
@@ -64,7 +80,9 @@ class WatchService {
       console.warn('[WatchService] startStreaming without connection');
       return;
     }
-    this._listeners.push(onBiometrics);
+    if (typeof onBiometrics === 'function' && !this._listeners.includes(onBiometrics)) {
+      this._listeners.push(onBiometrics);
+    }
 
     if (this._subscription) return;
     this._subscription = this._device.monitorCharacteristicForService(
@@ -73,6 +91,7 @@ class WatchService {
       (error, characteristic) => {
         if (error) {
           console.error('[WatchService] BLE notify error:', error);
+          this._scheduleReconnect(error);
           return;
         }
         const data = this._parseHRMeasurement(characteristic.value);
@@ -100,20 +119,78 @@ class WatchService {
     );
   }
 
-  stopStreaming() {
+  stopStreaming({ preserveListeners = false } = {}) {
     if (this._subscription) {
       this._subscription.remove();
       this._subscription = null;
     }
-    this._listeners = [];
+    if (!preserveListeners) {
+      this._listeners = [];
+    }
   }
 
   async disconnect() {
+    this._manualDisconnect = true;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     this.stopStreaming();
     if (this._device) {
       await this._device.cancelConnection();
       this._device = null;
     }
+    this._isConnected = false;
+    this._isReconnecting = false;
+    this._emitConnectionState('disconnected');
+  }
+
+  _scheduleReconnect(error) {
+    if (this._manualDisconnect || this._isReconnecting || !this._deviceId) {
+      return;
+    }
+
+    this._isConnected = false;
+    this._isReconnecting = true;
+    this.stopStreaming({ preserveListeners: true });
+
+    if (this._device) {
+      this._device.cancelConnection().catch(() => {});
+      this._device = null;
+    }
+
+    const delay = Math.min(1000 * (2 ** this._reconnectAttempts), MAX_RECONNECT_DELAY_MS);
+    this._reconnectAttempts += 1;
+    this._emitConnectionState('reconnecting', error, { delay });
+
+    this._reconnectTimer = setTimeout(async () => {
+      this._reconnectTimer = null;
+      const reconnected = await this.connect(this._deviceId);
+      if (reconnected) {
+        this.startStreaming();
+      } else {
+        this._isReconnecting = false;
+        this._scheduleReconnect(error);
+      }
+    }, delay);
+  }
+
+  _emitConnectionState(state, error = null, meta = {}) {
+    const payload = {
+      state,
+      connected: state === 'connected',
+      reconnectAttempts: this._reconnectAttempts,
+      error: error ? error.message : null,
+      ...meta,
+    };
+    this._connectionListeners.forEach((cb) => cb(payload));
+  }
+
+  onConnectionChange(cb) {
+    this._connectionListeners.push(cb);
+    return () => {
+      this._connectionListeners = this._connectionListeners.filter((listener) => listener !== cb);
+    };
   }
 
   /** Decode BLE Heart Rate Measurement characteristic (0x2A37) */
@@ -163,6 +240,15 @@ class WatchService {
 
   getCurrent() {
     return { hr: this._currentHR, hrv: this._currentHRV };
+  }
+
+  getConnectionState() {
+    return {
+      connected: this._isConnected,
+      reconnecting: this._isReconnecting,
+      reconnectAttempts: this._reconnectAttempts,
+      deviceId: this._deviceId,
+    };
   }
 }
 

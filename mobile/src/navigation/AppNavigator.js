@@ -18,6 +18,7 @@ import SettingsScreen from '../screens/SettingsScreen';
 
 import { useAnxietyProfileStore } from '../store/anxietyProfile';
 import RouteScoring from '../services/RouteScoring';
+import SyncService from '../services/SyncService';
 import TTSService from '../services/TTSService';
 import { COLORS, API } from '../utils/constants';
 
@@ -48,6 +49,10 @@ export default function AppNavigator() {
   useEffect(() => {
     // Load persisted profile on startup
     loadProfile();
+
+    SyncService.init().catch((error) => {
+      console.warn('[AppNavigator] Sync service init failed:', error?.message || error);
+    });
 
     // Wire up services that require API keys at app start
     if (API.GOOGLE_MAPS_KEY) {

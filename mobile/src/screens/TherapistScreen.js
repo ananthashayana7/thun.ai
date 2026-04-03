@@ -9,10 +9,9 @@ import {
   View, Text, StyleSheet, SafeAreaView, ScrollView,
   TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
-import axios from 'axios';
 import TTSService from '../services/TTSService';
 import IVISEngine from '../services/IVISEngine';
-import OBDService from '../services/OBDService';
+import SyncService from '../services/SyncService';
 import { useAnxietyProfileStore } from '../store/anxietyProfile';
 import { COLORS, API } from '../utils/constants';
 
@@ -40,6 +39,7 @@ export default function TherapistScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
   const [available, setAvailable] = useState(true);
   const scrollRef = useRef(null);
+  const pendingSubscriptions = useRef(new Map());
 
   // Check if vehicle is stationary (therapist only active at RPM=0)
   useEffect(() => {
@@ -47,8 +47,44 @@ export default function TherapistScreen({ navigation }) {
       const isStationary = IVISEngine.isTherapistAvailable();
       setAvailable(isStationary);
     }, 1000);
+
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => () => {
+    pendingSubscriptions.current.forEach((unsubscribe) => unsubscribe());
+    pendingSubscriptions.current.clear();
+  }, []);
+
+  const attachDeferredResponseListener = (requestKey) => {
+    const unsubscribe = SyncService.subscribe(requestKey, async (event) => {
+      if (event.status === 'completed') {
+        const assistantText = event.data?.response;
+        if (assistantText) {
+          setMessages((currentMessages) => currentMessages.map((message) => (
+            message.pendingKey === requestKey
+              ? { role: 'assistant', content: assistantText }
+              : message
+          )));
+          await TTSService.speak(assistantText, { priority: 'normal' });
+        }
+        pendingSubscriptions.current.get(requestKey)?.();
+        pendingSubscriptions.current.delete(requestKey);
+      }
+
+      if (event.status === 'failed') {
+        setMessages((currentMessages) => currentMessages.map((message) => (
+          message.pendingKey === requestKey
+            ? { role: 'assistant', content: "I'm still unable to connect. Please try again when the network is stable." }
+            : message
+        )));
+        pendingSubscriptions.current.get(requestKey)?.();
+        pendingSubscriptions.current.delete(requestKey);
+      }
+    });
+
+    pendingSubscriptions.current.set(requestKey, unsubscribe);
+  };
 
   const sendMessage = async (text = input.trim()) => {
     if (!text || loading) return;
@@ -59,14 +95,18 @@ export default function TherapistScreen({ navigation }) {
 
     const userMsg = { role: 'user', content: text };
     const updatedMessages = [...messages, userMsg];
+    const requestKey = `feedback.therapist.${Date.now()}`;
     setMessages(updatedMessages);
     setInput('');
     setLoading(true);
+    attachDeferredResponseListener(requestKey);
 
     try {
-      const resp = await axios.post(
-        `${API.BASE_URL}/feedback/therapist`,
-        {
+      const result = await SyncService.request({
+        requestKey,
+        method: 'POST',
+        url: `${API.BASE_URL}/feedback/therapist`,
+        body: {
           messages: updatedMessages.slice(-10), // last 10 for context
           systemContext: SYSTEM_CONTEXT,
           driverProfile: {
@@ -74,16 +114,32 @@ export default function TherapistScreen({ navigation }) {
             questionnaire: profile?.questionnaire,
           },
         },
-        { timeout: 30_000 }
-      );
+        timeout: 30_000,
+        queueIfOffline: true,
+      });
 
-      const assistantText = resp.data?.response;
-      if (assistantText) {
-        setMessages((m) => [...m, { role: 'assistant', content: assistantText }]);
+      if (result.status === 'success') {
+        const assistantText = result.data?.response;
+        if (assistantText) {
+          pendingSubscriptions.current.get(requestKey)?.();
+          pendingSubscriptions.current.delete(requestKey);
+          setMessages((m) => [...m, { role: 'assistant', content: assistantText }]);
         // Speak the response (speed gate applies – but therapist is stationary only anyway)
-        await TTSService.speak(assistantText, { priority: 'normal' });
+          await TTSService.speak(assistantText, { priority: 'normal' });
+        }
+      } else if (result.status === 'queued') {
+        setMessages((m) => [
+          ...m,
+          {
+            role: 'assistant',
+            content: "I'm offline right now. I saved your message and will answer automatically when the connection returns.",
+            pendingKey: requestKey,
+          },
+        ]);
       }
     } catch (err) {
+      pendingSubscriptions.current.get(requestKey)?.();
+      pendingSubscriptions.current.delete(requestKey);
       setMessages((m) => [
         ...m,
         { role: 'assistant', content: "I'm having trouble connecting right now. Please try again in a moment." },

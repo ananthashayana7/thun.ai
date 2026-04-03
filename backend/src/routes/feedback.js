@@ -6,19 +6,19 @@
 'use strict';
 
 const express = require('express');
-const { body, validationResult } = require('express-validator');
-const { llmRateLimiter } = require('../middleware/rateLimiter');
+const { llmRateLimiter, therapistRateLimiter } = require('../middleware/rateLimiter');
 const {
   generateConfidenceNarrative,
   generateScenarioVariants,
   generateTherapistResponse,
 } = require('../services/llmService');
 const { query, withTransaction } = require('../db/db');
+const {
+  feedbackGenerateSchema,
+  therapistChatSchema,
+} = require('../validation/schemas');
 
 const router = express.Router();
-
-// Apply strict rate limiting to all feedback endpoints
-router.use(llmRateLimiter);
 
 /**
  * POST /feedback/generate
@@ -26,18 +26,9 @@ router.use(llmRateLimiter);
  */
 router.post(
   '/generate',
-  [
-    body('sessionId').isString().notEmpty(),
-    body('anxietyScoreAvg').isFloat({ min: 0, max: 100 }),
-    body('peakStress').isFloat({ min: 0, max: 100 }),
-    body('stressEvents').optional().isArray({ max: 200 }),
-    body('routeMeta').optional().isObject(),
-    body('driverProfile').optional().isObject(),
-  ],
+  llmRateLimiter,
+  feedbackGenerateSchema,
   async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
     try {
       const { sessionId, anxietyScoreAvg, peakStress, stressEvents, routeMeta, driverProfile } = req.body;
 
@@ -47,6 +38,13 @@ router.post(
         [sessionId, req.user.userId]
       );
       if (cached.rows[0]?.confidence_narrative) {
+        // Log cached narrative access
+        await req.auditLog({
+          action: 'FEEDBACK_GENERATE_CACHED',
+          resourceType: 'drive_session',
+          resourceId: sessionId,
+          details: { sessionId },
+        });
         return res.json({
           narrative: cached.rows[0].confidence_narrative,
           scenarios: [],
@@ -55,6 +53,7 @@ router.post(
       }
 
       // Generate in parallel where possible
+      // Pass request ID for distributed tracing
       const [narrative, scenarios] = await Promise.all([
         generateConfidenceNarrative({
           driverName: driverProfile?.name,
@@ -62,7 +61,7 @@ router.post(
           peakStress,
           stressEvents,
           routeMeta,
-        }),
+        }, req.id),
         generateScenarioVariants(stressEvents || [], driverProfile || {}),
       ]);
 
@@ -82,6 +81,19 @@ router.post(
         );
       });
 
+      // Audit log feedback generation
+      await req.auditLog({
+        action: 'FEEDBACK_GENERATE',
+        resourceType: 'drive_session',
+        resourceId: sessionId,
+        details: {
+          sessionId,
+          confidenceScore,
+          scenarioCount: scenarios.length,
+          narrativeLength: narrative.length,
+        },
+      });
+
       res.json({ narrative, scenarios });
     } catch (err) {
       next(err);
@@ -95,16 +107,9 @@ router.post(
  */
 router.post(
   '/therapist',
-  [
-    body('messages').isArray({ min: 1, max: 20 }).withMessage('messages array required (max 20)'),
-    body('messages.*.role').isIn(['user', 'assistant']),
-    body('messages.*.content').isString().notEmpty().isLength({ max: 1000 }),
-    body('systemContext').optional().isString().isLength({ max: 500 }),
-  ],
+  therapistRateLimiter,
+  therapistChatSchema,
   async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
     try {
       const { messages, systemContext } = req.body;
 
@@ -114,7 +119,25 @@ router.post(
         .map((m) => ({ role: m.role, content: String(m.content).slice(0, 1000) }));
 
       const safeContext = systemContext ? String(systemContext).slice(0, 500) : undefined;
-      const response = await generateTherapistResponse(safeMessages, safeContext);
+
+      // Generate response with request ID for tracing
+      const response = await generateTherapistResponse(
+        safeMessages,
+        safeContext,
+        req.id
+      );
+
+      // Audit log therapist conversation
+      await req.auditLog({
+        action: 'THERAPIST_CHAT',
+        resourceType: 'therapist',
+        details: {
+          messageCount: messages.length,
+          hasSystemContext: !!systemContext,
+          responseLength: response.length,
+        },
+      });
+
       res.json({ response });
     } catch (err) {
       next(err);

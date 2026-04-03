@@ -7,6 +7,7 @@ from pathlib import Path
 
 import requests
 
+from thunai.circuit_breaker import get_breaker
 from thunai.interaction.base import TTSProvider
 
 log = logging.getLogger(__name__)
@@ -32,12 +33,13 @@ class SarvamTTS(TTSProvider):
         self.timeout = cfg.get("timeout_s", 3)
         self.cache_dir = Path(cfg.get("cache_dir", "~/.thunai/audio_cache")).expanduser()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.breaker = get_breaker("sarvam", failure_threshold=5, timeout=300)
 
     def synthesise(self, text: str, language: str = "en-IN") -> bytes:
         cache_path = self._cache_path(text, language)
         if cache_path.exists():
             return cache_path.read_bytes()
-        audio = self._api_call(text, language)
+        audio = self.breaker.call(self._api_call, text, language)
         cache_path.write_bytes(audio)
         return audio
 

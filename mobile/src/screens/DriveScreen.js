@@ -30,6 +30,8 @@ export default function DriveScreen({ navigation, route: navRoute }) {
   const [hudEvent, setHudEvent] = useState(null);
   const [breathingActive, setBreathingActive] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [obdConnection, setObdConnection] = useState(() => OBDService.getConnectionState());
+  const [watchConnection, setWatchConnection] = useState(() => WatchService.getConnectionState());
 
   const tickRef = useRef(null);
   const timerRef = useRef(null);
@@ -58,6 +60,14 @@ export default function DriveScreen({ navigation, route: navRoute }) {
       biometrics.current = bio;
     });
 
+    const offObdConnection = OBDService.onConnectionChange((state) => {
+      setObdConnection(state);
+    });
+
+    const offWatchConnection = WatchService.onConnectionChange((state) => {
+      setWatchConnection(state);
+    });
+
     // Tick loop
     tickRef.current = setInterval(async () => {
       const obd = OBDService.getLastData();
@@ -80,6 +90,8 @@ export default function DriveScreen({ navigation, route: navRoute }) {
       clearInterval(timerRef.current);
       offHud();
       offBreath();
+      offObdConnection();
+      offWatchConnection();
       WatchService.stopStreaming();
     };
   }, []);
@@ -153,6 +165,14 @@ export default function DriveScreen({ navigation, route: navRoute }) {
       </View>
 
       {/* OBD telemetry */}
+      {(obdConnection?.state === 'reconnecting' || watchConnection?.state === 'reconnecting') && (
+        <View style={styles.sensorBanner}>
+          <Text style={styles.sensorBannerText}>
+            {obdConnection?.state === 'reconnecting' ? 'Reconnecting OBD adapter' : 'Reconnecting heart-rate sensor'}
+          </Text>
+        </View>
+      )}
+
       <View style={styles.telemetry}>
         <View style={styles.telemCard}>
           <Text style={styles.telemValue}>{speed}</Text>
@@ -209,6 +229,17 @@ const styles = StyleSheet.create({
   gaugeValue: { fontSize: 96, fontWeight: '900', lineHeight: 100 },
   gaugeTrack: { width: '80%', height: 10, backgroundColor: COLORS.surface, borderRadius: 5, marginTop: 16 },
   gaugeFill: { height: '100%', borderRadius: 5 },
+  sensorBanner: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: `${COLORS.warning}22`,
+    borderWidth: 1,
+    borderColor: `${COLORS.warning}55`,
+  },
+  sensorBannerText: { color: COLORS.warning, fontSize: 13, fontWeight: '700', textAlign: 'center' },
   telemetry: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 20, paddingVertical: 16 },
   telemCard: { alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, flex: 1, marginHorizontal: 6 },
   telemValue: { fontSize: 28, fontWeight: '800', color: COLORS.text },

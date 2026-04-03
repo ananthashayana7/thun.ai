@@ -10,6 +10,7 @@ import base64
 import logging
 import os
 
+from thunai.circuit_breaker import get_breaker
 from thunai.config import VLMGeminiConfig
 from thunai.intelligence.base import BaseVLMProvider, VLMResponse
 
@@ -22,6 +23,7 @@ class GeminiVLMProvider(BaseVLMProvider):
     def __init__(self, config: VLMGeminiConfig) -> None:
         self._config = config
         self._client: object | None = None
+        self.breaker = get_breaker("gemini", failure_threshold=5, timeout=300)
 
     @property
     def provider_name(self) -> str:
@@ -66,6 +68,17 @@ class GeminiVLMProvider(BaseVLMProvider):
         image_bytes: bytes,
         prompt: str = "Describe what is happening on the road in this image.",
     ) -> VLMResponse:
+        return self.breaker.call(
+            self._do_describe_scene,
+            image_bytes,
+            prompt=prompt,
+        )
+
+    def _do_describe_scene(
+        self,
+        image_bytes: bytes,
+        prompt: str = "Describe what is happening on the road in this image.",
+    ) -> VLMResponse:
         try:
             import google.generativeai as genai  # type: ignore[import]
         except ImportError as exc:
@@ -95,8 +108,16 @@ class GeminiVLM:
         self.model = cfg["model"]
         self.api_key = cfg.get("api_key")
         self.max_tokens = cfg.get("max_tokens", 256)
+        self.breaker = get_breaker("gemini", failure_threshold=5, timeout=300)
 
     def describe_scene(self, image_bytes: bytes, prompt: str) -> str:
+        return self.breaker.call(
+            self._do_describe_scene,
+            image_bytes,
+            prompt,
+        )
+
+    def _do_describe_scene(self, image_bytes: bytes, prompt: str) -> str:
         import base64
         import requests
 

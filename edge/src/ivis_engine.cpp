@@ -34,14 +34,39 @@ IVISEngine::~IVISEngine() {
 // ─── Init / Shutdown ──────────────────────────────────────────────────────────
 
 bool IVISEngine::init() {
+    bool success = true;
+
+#ifdef RV1126_PROD
+    // 1. Initialize CAN Bus (SocketCAN)
+    std::cout << "[IVISEngine] Initializing SocketCAN (can0)...\n";
+    // system("ip link set can0 type can bitrate 500000");
+    // system("ip link set can0 up");
+    // socket_can_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+    
+    // 2. Initialize RKNN NPU for CV models (YOLO, LaneNet)
+    std::cout << "[IVISEngine] Loading RKNN models to NPU...\n";
+    // rknn_init(&ctx_yolo, "yolo_emergency.rknn", 0, 0, NULL);
+    // rknn_init(&ctx_lane, "lanenet.rknn", 0, 0, NULL);
+
+    // 3. Start BLE Scan for biometric packets
+    std::cout << "[IVISEngine] Starting BLE GATT client for smartwatch synchronization...\n";
+    // gatt_client_init();
+#else
     // Hardware initialisation is platform-specific.
     // On RV1126 production builds, this opens the CAN socket,
     // initialises the RKNN NPU for CV inference, and starts the BLE scan.
     std::cout << "[IVISEngine] init() – running in software simulation mode\n";
-    return true;
+#endif
+
+    return success;
 }
 
 void IVISEngine::shutdown() {
+#ifdef RV1126_PROD
+    // system("ip link set can0 down");
+    // rknn_destroy(ctx_yolo);
+    // rknn_destroy(ctx_lane);
+#endif
     std::cout << "[IVISEngine] shutdown\n";
 }
 

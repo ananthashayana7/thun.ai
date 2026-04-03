@@ -3,11 +3,12 @@
  * Connects to the OBD-2 adapter via Bluetooth Classic and parses ELM327 PIDs.
  * Emits real-time telemetry: speed, RPM, throttle, engine load, coolant temp.
  */
-import { NativeEventEmitter } from 'react-native';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
 import { OBD } from '../utils/constants';
 
 const ELM327_INIT = ['ATZ', 'ATE0', 'ATL0', 'ATSP0'];
+const MAX_RECONNECT_DELAY_MS = 30000;
+const MAX_CONSECUTIVE_POLL_ERRORS = 3;
 
 const PID_MAP = {
   '010D': OBD.SPEED,        // Vehicle speed (km/h)
@@ -22,20 +23,42 @@ const POLL_INTERVAL_MS = 200; // 5 Hz
 class OBDService {
   constructor() {
     this._device = null;
+    this._deviceAddress = null;
     this._pollTimer = null;
     this._listeners = [];
+    this._connectionListeners = [];
     this._lastData = {};
+    this._lastPollSnapshot = null;
+    this._reconnectTimer = null;
+    this._reconnectAttempts = 0;
+    this._isReconnecting = false;
+    this._isConnected = false;
+    this._manualDisconnect = false;
+    this._consecutivePollErrors = 0;
   }
 
-  async connect(deviceAddress) {
+  async connect(deviceAddress, opts = {}) {
+    const { resetBackoff = true } = opts;
+
     try {
+      this._manualDisconnect = false;
+      this._deviceAddress = deviceAddress;
       const connected = await RNBluetoothClassic.connectToDevice(deviceAddress);
       if (!connected) throw new Error('BT connection failed');
       this._device = connected;
       await this._initElm327();
+      if (resetBackoff) {
+        this._reconnectAttempts = 0;
+      }
+      this._isConnected = true;
+      this._isReconnecting = false;
+      this._consecutivePollErrors = 0;
+      this._emitConnectionState('connected');
       return true;
     } catch (err) {
       console.error('[OBDService] connect error:', err);
+      this._isConnected = false;
+      this._emitConnectionState('disconnected', err);
       return false;
     }
   }
@@ -52,46 +75,77 @@ class OBDService {
       console.warn('[OBDService] startPolling called without connection');
       return;
     }
-    this._listeners.push(onData);
+    if (typeof onData === 'function' && !this._listeners.includes(onData)) {
+      this._listeners.push(onData);
+    }
 
     if (this._pollTimer) return; // already polling
     this._pollTimer = setInterval(async () => {
       const telemetry = {};
+      let cycleErrors = 0;
+
       for (const [pid, key] of Object.entries(PID_MAP)) {
         try {
           const raw = await this._queryPID(pid);
           telemetry[key] = this._parsePID(pid, raw);
-        } catch {
+        } catch (err) {
+          cycleErrors += 1;
           telemetry[key] = this._lastData[key] ?? null;
+          if (cycleErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+            console.warn('[OBDService] polling degraded, scheduling reconnect:', err.message);
+            this._scheduleReconnect(err);
+            break;
+          }
         }
       }
+
       // Derived: infer current gear from speed/RPM (heuristic)
       telemetry[OBD.GEAR] = this._inferGear(
         telemetry[OBD.SPEED],
         telemetry[OBD.RPM]
       );
+      this._consecutivePollErrors = cycleErrors === 0 ? 0 : this._consecutivePollErrors + 1;
       this._lastData = telemetry;
+      this._lastPollSnapshot = {
+        telemetry,
+        timestamp: Date.now(),
+        healthy: cycleErrors === 0,
+      };
       this._listeners.forEach((cb) => cb(telemetry));
     }, POLL_INTERVAL_MS);
   }
 
-  stopPolling() {
+  stopPolling({ preserveListeners = false } = {}) {
     if (this._pollTimer) {
       clearInterval(this._pollTimer);
       this._pollTimer = null;
     }
-    this._listeners = [];
+    if (!preserveListeners) {
+      this._listeners = [];
+    }
   }
 
   async disconnect() {
+    this._manualDisconnect = true;
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     this.stopPolling();
     if (this._device) {
       await this._device.disconnect();
       this._device = null;
     }
+    this._isConnected = false;
+    this._isReconnecting = false;
+    this._emitConnectionState('disconnected');
   }
 
   async _queryPID(pid) {
+    if (!this._device) {
+      throw new Error('OBD device not connected');
+    }
+
     await this._device.write(`${pid}\r`);
     // Read response with timeout; unsubscribe listener to prevent memory leak
     return new Promise((resolve, reject) => {
@@ -105,6 +159,54 @@ class OBDService {
         reject(new Error('PID timeout'));
       }, 500);
     });
+  }
+
+  _scheduleReconnect(reason) {
+    if (this._manualDisconnect || this._isReconnecting || !this._deviceAddress) {
+      return;
+    }
+
+    this._isReconnecting = true;
+    this._isConnected = false;
+    this.stopPolling({ preserveListeners: true });
+
+    if (this._device) {
+      this._device.disconnect().catch(() => {});
+      this._device = null;
+    }
+
+    const delay = Math.min(1000 * (2 ** this._reconnectAttempts), MAX_RECONNECT_DELAY_MS);
+    this._reconnectAttempts += 1;
+    this._emitConnectionState('reconnecting', reason, { delay });
+
+    this._reconnectTimer = setTimeout(async () => {
+      this._reconnectTimer = null;
+      const reconnected = await this.connect(this._deviceAddress, { resetBackoff: false });
+      if (reconnected) {
+        this.startPolling();
+      } else {
+        this._isReconnecting = false;
+        this._scheduleReconnect(reason);
+      }
+    }, delay);
+  }
+
+  _emitConnectionState(state, error = null, meta = {}) {
+    const payload = {
+      state,
+      connected: state === 'connected',
+      reconnectAttempts: this._reconnectAttempts,
+      error: error ? error.message : null,
+      ...meta,
+    };
+    this._connectionListeners.forEach((cb) => cb(payload));
+  }
+
+  onConnectionChange(cb) {
+    this._connectionListeners.push(cb);
+    return () => {
+      this._connectionListeners = this._connectionListeners.filter((listener) => listener !== cb);
+    };
   }
 
   _parsePID(pid, raw) {
@@ -143,6 +245,16 @@ class OBDService {
 
   getLastData() {
     return this._lastData;
+  }
+
+  getConnectionState() {
+    return {
+      connected: this._isConnected,
+      reconnecting: this._isReconnecting,
+      reconnectAttempts: this._reconnectAttempts,
+      lastPollSnapshot: this._lastPollSnapshot,
+      deviceAddress: this._deviceAddress,
+    };
   }
 }
 

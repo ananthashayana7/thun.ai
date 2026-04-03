@@ -9,6 +9,8 @@
 
 const request = require('supertest');
 
+const SESSION_ID = '11111111-1111-4111-8111-111111111111';
+
 // ─── Mock pg pool before requiring app ───────────────────────────────────────
 jest.mock('../src/db/db', () => ({
   query: jest.fn(),
@@ -61,7 +63,15 @@ jest.mock('../src/services/routeScoring', () => ({
 }));
 
 const { query, withTransaction } = require('../src/db/db');
+const {
+  generateConfidenceNarrative,
+  generateTherapistResponse,
+} = require('../src/services/llmService');
 const app = require('../src/index');
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
 // ─── Helper: auth header with valid backend JWT ───────────────────────────────
 const AUTH_HEADER = 'Bearer thun_valid.jwt.token';
@@ -146,12 +156,14 @@ describe('Protected routes require auth', () => {
 
 // ─── Drive routes ─────────────────────────────────────────────────────────────
 describe('POST /drive', () => {
-  it('returns 400 when startedAt is missing', async () => {
+  it('returns 201 when startedAt is omitted', async () => {
+    query.mockResolvedValue({ rows: [{ id: SESSION_ID, started_at: new Date().toISOString() }] });
     const res = await request(app)
       .post('/drive')
       .set('Authorization', AUTH_HEADER)
       .send({});
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(201);
+    expect(res.headers['x-request-id']).toBeDefined();
   });
 
   it('returns 400 when startedAt is not ISO8601', async () => {
@@ -163,7 +175,7 @@ describe('POST /drive', () => {
   });
 
   it('returns 201 with valid startedAt', async () => {
-    query.mockResolvedValue({ rows: [{ id: 'session-uuid', started_at: new Date().toISOString() }] });
+    query.mockResolvedValue({ rows: [{ id: SESSION_ID, started_at: new Date().toISOString() }] });
     const res = await request(app)
       .post('/drive')
       .set('Authorization', AUTH_HEADER)
@@ -206,7 +218,7 @@ describe('POST /feedback/generate', () => {
     const res = await request(app)
       .post('/feedback/generate')
       .set('Authorization', AUTH_HEADER)
-      .send({ sessionId: 'abc', anxietyScoreAvg: 150, peakStress: 70 });
+      .send({ sessionId: SESSION_ID, anxietyScoreAvg: 150, peakStress: 70 });
     expect(res.statusCode).toBe(400);
   });
 
@@ -215,10 +227,11 @@ describe('POST /feedback/generate', () => {
     const res = await request(app)
       .post('/feedback/generate')
       .set('Authorization', AUTH_HEADER)
-      .send({ sessionId: 'session-uuid', anxietyScoreAvg: 40, peakStress: 60 });
+      .send({ sessionId: SESSION_ID, anxietyScoreAvg: 40, peakStress: 60 });
     expect(res.statusCode).toBe(200);
     expect(res.body.cached).toBe(true);
     expect(res.body.narrative).toBe('Cached narrative text.');
+    expect(res.headers['x-request-id']).toBeDefined();
   });
 
   it('generates new narrative when not cached', async () => {
@@ -230,9 +243,13 @@ describe('POST /feedback/generate', () => {
     const res = await request(app)
       .post('/feedback/generate')
       .set('Authorization', AUTH_HEADER)
-      .send({ sessionId: 'session-uuid', anxietyScoreAvg: 40, peakStress: 60 });
+      .send({ sessionId: SESSION_ID, anxietyScoreAvg: 40, peakStress: 60 });
     expect(res.statusCode).toBe(200);
     expect(res.body.narrative).toBe('Great drive! You handled it well.');
+    expect(generateConfidenceNarrative).toHaveBeenCalledWith(
+      expect.objectContaining({ anxietyScoreAvg: 40, peakStress: 60 }),
+      expect.any(String)
+    );
   });
 });
 
@@ -268,6 +285,11 @@ describe('POST /feedback/therapist', () => {
       .send({ messages: [{ role: 'user', content: "I'm feeling anxious" }] });
     expect(res.statusCode).toBe(200);
     expect(res.body.response).toBe('Take a deep breath. You are safe.');
+    expect(generateTherapistResponse).toHaveBeenCalledWith(
+      expect.any(Array),
+      undefined,
+      expect.any(String)
+    );
   });
 });
 

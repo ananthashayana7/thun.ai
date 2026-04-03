@@ -58,11 +58,41 @@ class StressIndexService {
     const bioScore = this._computeBiometricScore(biometrics, profile);
     const cvScore = this._computeCVScore(cvSignals);
 
+    const componentStates = [
+      {
+        available: this._hasUsableOBD(obd),
+        score: obdScore,
+        weight: WEIGHTS.obdDriving,
+      },
+      {
+        available: this._hasUsableBiometrics(biometrics),
+        score: bioScore,
+        weight: WEIGHTS.biometric,
+      },
+      {
+        available: this._hasUsableCVSignals(cvSignals),
+        score: cvScore,
+        weight: WEIGHTS.cvSignal,
+      },
+    ];
+
+    const availableWeight = componentStates
+      .filter((component) => component.available)
+      .reduce((sum, component) => sum + component.weight, 0);
+
+    if (availableWeight === 0) {
+      return this._lastScore;
+    }
+
     const composite = Math.min(
       100,
-      obdScore * WEIGHTS.obdDriving +
-      bioScore * WEIGHTS.biometric +
-      cvScore * WEIGHTS.cvSignal
+      componentStates.reduce((sum, component) => {
+        if (!component.available) {
+          return sum;
+        }
+
+        return sum + component.score * (component.weight / availableWeight);
+      }, 0)
     );
 
     const rounded = Math.round(composite);
@@ -176,6 +206,34 @@ class StressIndexService {
     const { tailgatingRisk = 0, laneDrift = 0, headPose = 0 } = cvSignals;
     // All inputs expected as 0–100 from edge
     return (tailgatingRisk * 0.4 + laneDrift * 0.35 + headPose * 0.25);
+  }
+
+  _hasUsableOBD(obd) {
+    if (!obd) return false;
+    return [OBD.SPEED, OBD.RPM, OBD.THROTTLE, OBD.ENGINE_LOAD, OBD.GEAR]
+      .some((key) => obd[key] !== null && obd[key] !== undefined);
+  }
+
+  _hasUsableBiometrics(biometrics) {
+    if (!biometrics) return false;
+
+    const validHR = biometrics.hr !== null
+      && biometrics.hr !== undefined
+      && biometrics.hr >= BIOMETRIC.HR_MIN
+      && biometrics.hr <= BIOMETRIC.HR_MAX;
+
+    const validHRV = biometrics.hrv !== null
+      && biometrics.hrv !== undefined
+      && biometrics.hrv >= BIOMETRIC.HRV_MIN
+      && biometrics.hrv <= BIOMETRIC.HRV_MAX;
+
+    return validHR || validHRV;
+  }
+
+  _hasUsableCVSignals(cvSignals) {
+    if (!cvSignals) return false;
+    return ['tailgatingRisk', 'laneDrift', 'headPose', 'emergencyVehicle']
+      .some((key) => typeof cvSignals[key] === 'number' || typeof cvSignals[key] === 'boolean');
   }
 
   // ─── Intervention check ──────────────────────────────────────────────────────

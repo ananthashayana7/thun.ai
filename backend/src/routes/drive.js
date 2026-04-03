@@ -5,9 +5,13 @@
 'use strict';
 
 const express = require('express');
-const { body, param, validationResult } = require('express-validator');
+const { param, validationResult } = require('express-validator');
 const { query } = require('../db/db');
 const { v4: uuidv4 } = require('uuid');
+const {
+  driveCreateSchema,
+  driveUpdateSchema,
+} = require('../validation/schemas');
 
 const router = express.Router();
 
@@ -15,14 +19,8 @@ const router = express.Router();
 // Create a new drive session
 router.post(
   '/',
-  [
-    body('startedAt').isISO8601().withMessage('startedAt must be ISO8601'),
-    body('routeMeta').optional().isObject(),
-  ],
+  driveCreateSchema,
   async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
     try {
       const { startedAt, routeMeta } = req.body;
       const id = uuidv4();
@@ -30,8 +28,20 @@ router.post(
         `INSERT INTO drive_sessions (id, user_id, started_at, route_meta)
          VALUES ($1, $2, $3, $4)
          RETURNING id, started_at`,
-        [id, req.user.userId, startedAt, JSON.stringify(routeMeta || {})]
+        [id, req.user.userId, startedAt || new Date().toISOString(), JSON.stringify(routeMeta || {})]
       );
+
+      // Audit log session creation
+      await req.auditLog({
+        action: 'DRIVE_SESSION_CREATED',
+        resourceType: 'drive_session',
+        resourceId: id,
+        details: {
+          sessionId: id,
+          routeSummary: routeMeta?.summary || 'Unknown',
+        },
+      });
+
       res.status(201).json(result.rows[0]);
     } catch (err) {
       next(err);
@@ -43,18 +53,8 @@ router.post(
 // Complete / update a drive session
 router.put(
   '/:id',
-  [
-    param('id').isUUID(),
-    body('endedAt').optional().isISO8601(),
-    body('anxietyScoreAvg').optional().isFloat({ min: 0, max: 100 }),
-    body('peakStress').optional().isFloat({ min: 0, max: 100 }),
-    body('stressEvents').optional().isArray(),
-    body('telemetrySummary').optional().isObject(),
-  ],
+  driveUpdateSchema,
   async (req, res, next) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
     try {
       const { id } = req.params;
       const { endedAt, anxietyScoreAvg, peakStress, stressEvents, telemetrySummary, routeMeta } = req.body;
@@ -82,6 +82,22 @@ router.put(
       );
 
       if (result.rows.length === 0) return res.status(404).json({ error: 'Session not found' });
+
+      // Audit log session update
+      await req.auditLog({
+        action: 'DRIVE_SESSION_UPDATED',
+        resourceType: 'drive_session',
+        resourceId: id,
+        details: {
+          sessionId: id,
+          updated: {
+            endedAt: !!endedAt,
+            anxietyScore: anxietyScoreAvg ?? null,
+            peakStress: peakStress ?? null,
+          },
+        },
+      });
+
       res.json({ success: true, id });
     } catch (err) {
       next(err);
