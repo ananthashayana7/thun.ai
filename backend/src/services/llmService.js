@@ -180,22 +180,29 @@ function withTimeout(promise, timeoutMs, providerName) {
  * Generate a fallback narrative if all LLMs fail.
  */
 function generateFallbackNarrative(params) {
-  const { driverName, anxietyScoreAvg, peakStress, routeMeta } = params;
+  const { driverName, anxietyScoreAvg, peakStress, routeMeta, telemetrySummary } = params;
+  const corridorSummary = telemetrySummary?.confidenceCorridor;
+  const corridorSentence = corridorSummary?.encountered
+    ? ` You also handled ${corridorSummary.successfulPassages} tight passage${corridorSummary.successfulPassages === 1 ? '' : 's'} with up to ${corridorSummary.bestSpareCm ?? 'unknown'} cm of spare room, which is exactly how spatial confidence gets built.`
+    : '';
   return `Dear ${driverName || 'Driver'},
 
 Thank you for completing this drive. Your session data shows an average stress level of ${anxietyScoreAvg}/100 with a peak of ${peakStress}/100 during your journey on ${routeMeta?.summary || 'your route'}.
 
-Despite some challenging moments, you successfully completed the drive, which demonstrates your capability and resilience. Every drive is an opportunity to build confidence and develop new coping strategies.
+Despite some challenging moments, you successfully completed the drive, which demonstrates your capability and resilience.${corridorSentence} Every drive is an opportunity to build confidence and develop new coping strategies.
 
 For your next drive, focus on one small thing you did well today and try to replicate it. Small, consistent improvements build lasting confidence.
 
 You're doing great. Keep driving safely.`;
 }
 
-function buildNarrativePrompt({ driverName, anxietyScoreAvg, peakStress, stressEvents, routeMeta }) {
+function buildNarrativePrompt({ driverName, anxietyScoreAvg, peakStress, stressEvents, routeMeta, telemetrySummary }) {
   const eventSummary = stressEvents?.length > 0
     ? stressEvents.slice(0, 5).map((e) => `stress=${e.score} at ${e.speed}km/h`).join('; ')
     : 'none recorded';
+  const corridorSummary = telemetrySummary?.confidenceCorridor?.encountered
+    ? `\n- Tight passage support: ${telemetrySummary.confidenceCorridor.successfulPassages} successful passage(s), ${telemetrySummary.confidenceCorridor.blockedPassages} blocked decision(s), best spare clearance ${telemetrySummary.confidenceCorridor.bestSpareCm ?? 'unknown'} cm, confidence moved from ${telemetrySummary.confidenceCorridor.confidenceBefore ?? 'unknown'} to ${telemetrySummary.confidenceCorridor.confidenceAfter ?? 'unknown'}.`
+    : '';
 
   return `You are a compassionate driving confidence coach.
 Write a personalised post-drive confidence narrative for ${driverName || 'the driver'}.
@@ -205,6 +212,7 @@ Drive data:
 - Average stress index: ${anxietyScoreAvg}/100
 - Peak stress: ${peakStress}/100
 - Stress events: ${eventSummary}
+${corridorSummary}
 
 Guidelines:
 - Tone: warm, encouraging, evidence-based CBT framing

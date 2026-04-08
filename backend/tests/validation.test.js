@@ -229,8 +229,29 @@ describe('String field length limits', () => {
         anxietyScoreAvg: 50,
         peakStress: 70,
         driverProfile: { name: 'x'.repeat(101) },
-      });
+    });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('accepts telemetrySummary confidence corridor payload', async () => {
+    const res = await request(app)
+      .post('/feedback/generate')
+      .set('Authorization', AUTH_HEADER)
+      .send({
+        sessionId: SESSION_ID,
+        anxietyScoreAvg: 50,
+        peakStress: 70,
+        telemetrySummary: {
+          confidenceCorridor: {
+            encountered: true,
+            successfulPassages: 1,
+            bestSpareCm: 28,
+            confidenceBefore: 24,
+            confidenceAfter: 31,
+          },
+        },
+      });
+    expect(res.statusCode).toBe(200);
   });
 
   it('rejects therapist message content over 2000 chars', async () => {

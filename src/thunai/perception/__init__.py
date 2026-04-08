@@ -178,12 +178,14 @@ class ObjectDetector:
         emergency = any(d.label in self._EMERGENCY_LABELS for d in detections)
         proximity = any(d.label in self._PROXIMITY_LABELS for d in detections)
         lane_departure = self._check_lane_departure(detections)
+        drowsiness     = self._check_drowsiness(detections)
 
         return PerceptionResult(
             detections=detections,
             emergency_vehicle_detected=emergency,
             lane_departure_detected=lane_departure,
             proximity_alert=proximity,
+            drowsiness_detected=drowsiness,
             frame_timestamp_ms=timestamp_ms,
         )
 
@@ -471,6 +473,34 @@ class ObjectDetector:
                 return True
 
         return False
+
+    @classmethod
+    def _check_drowsiness(cls, detections: list[Detection]) -> bool:
+        """
+        Heuristic drowsiness check based on driver face/eye detection.
+        
+        This stub checks for labels like 'closed_eyes' or 'yawn' which 
+        would be produced by a specialized head-pose and gaze model.
+        """
+        # In production: this would come from a dlib/mediapipe or specialized 
+        # RKNN drowsiness model running on the device.
+        drowsy_labels = {"closed_eyes", "yawn", "nodding_head"}
+        return any(d.label in drowsy_labels and d.confidence > 0.7 for d in detections)
+
+    def stream_vlm_gemini(self, frame_bytes: bytes) -> str:
+        """
+        Stream a frame to Gemini 2.0 Flash for detailed scene analysis.
+        This provides high-level narrative context (e.g. 'heavy rainfall',
+        'construction zone ahead') that small models miss.
+        """
+        if not self._config.gemini_vlm:
+            return ""
+            
+        # Placeholder for real async VLM streaming logic
+        # In a real impl, this would use a background thread to avoid 
+        # blocking the < 50ms edge control loop.
+        logger.info("Gemini VLM analysis triggered...")
+        return "Heavy traffic with potential construction zone detected."
 
     # ── stub backend ────────────────────────────────────────────────────
 

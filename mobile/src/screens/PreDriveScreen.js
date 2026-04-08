@@ -8,6 +8,8 @@ import {
   TouchableOpacity, ScrollView, ActivityIndicator, Alert,
 } from 'react-native';
 import RouteScoring from '../services/RouteScoring';
+import ConfidenceCorridorService from '../services/ConfidenceCorridorService';
+import { useAnxietyProfileStore } from '../store/anxietyProfile';
 import { COLORS } from '../utils/constants';
 
 function RouteOption({ route, selected, onSelect }) {
@@ -45,6 +47,15 @@ function RouteOption({ route, selected, onSelect }) {
           </Text>
         ))}
       </View>
+
+      {route.confidenceCorridor?.available && (
+        <View style={styles.corridorPreview}>
+          <Text style={styles.corridorPreviewTitle}>Confidence corridor preview</Text>
+          <Text style={styles.corridorPreviewBody}>
+            {route.confidenceCorridor.segmentLabel} with about {route.confidenceCorridor.predictedSpareCm} cm to spare.
+          </Text>
+        </View>
+      )}
     </TouchableOpacity>
   );
 }
@@ -57,10 +68,12 @@ function factorLabel(key) {
     heavyVehicles: '🚛 Heavy',
     narrowLanes: '🔀 Narrow',
   };
+  map.customTriggers = 'Custom';
   return map[key] || key;
 }
 
 export default function PreDriveScreen({ navigation }) {
+  const { profile } = useAnxietyProfileStore();
   const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
   const [routes, setRoutes] = useState([]);
@@ -74,8 +87,16 @@ export default function PreDriveScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      const scored = await RouteScoring.scoreRoutes(origin.trim(), destination.trim(), { alternatives: true });
-      setRoutes(scored);
+      const scored = await RouteScoring.scoreRoutes(origin.trim(), destination.trim(), {
+        alternatives: true,
+        triggerPreferences: profile?.triggerPreferences,
+      });
+      setRoutes(
+        scored.map((route) => ({
+          ...route,
+          confidenceCorridor: ConfidenceCorridorService.buildRoutePreview(route, profile),
+        }))
+      );
       setSelectedIdx(0); // best (lowest score) first
     } catch (err) {
       Alert.alert('Route error', 'Could not fetch routes. Please try again.');
@@ -93,6 +114,8 @@ export default function PreDriveScreen({ navigation }) {
         duration: chosen.duration,
         distance: chosen.distance,
         anxietyScore: chosen.anxietyScore,
+        breakdown: chosen.breakdown,
+        confidenceCorridor: chosen.confidenceCorridor,
         route: chosen.route,
       },
     });
@@ -198,6 +221,16 @@ const styles = StyleSheet.create({
   metaItem: { fontSize: 14, color: COLORS.textSecondary },
   breakdown: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   breakdownItem: { fontSize: 12, color: COLORS.muted },
+  corridorPreview: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: `${COLORS.primary}15`,
+    borderWidth: 1,
+    borderColor: `${COLORS.primary}35`,
+  },
+  corridorPreviewTitle: { fontSize: 12, color: COLORS.primary, fontWeight: '700', marginBottom: 4 },
+  corridorPreviewBody: { fontSize: 13, color: COLORS.textSecondary, lineHeight: 18 },
   footer: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 20, backgroundColor: COLORS.background },
   startBtn: { backgroundColor: COLORS.primary, borderRadius: 14, padding: 18, alignItems: 'center' },
   startBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },

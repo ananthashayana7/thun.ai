@@ -4,7 +4,7 @@
  * Orchestrates: OBD polling → WatchService → StressIndex → IVISEngine
  * Renders: HUD overlay, stress gauge, breathing cue animation, intervention toasts.
  */
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
   Animated, Alert, StatusBar,
@@ -13,15 +13,17 @@ import { nanoid } from 'nanoid/non-secure';
 import OBDService from '../services/OBDService';
 import WatchService from '../services/WatchService';
 import IVISEngine from '../services/IVISEngine';
+import ConfidenceCorridorService from '../services/ConfidenceCorridorService';
 import LocalStorage from '../services/LocalStorage';
 import { useAnxietyProfileStore } from '../store/anxietyProfile';
-import { COLORS, INTERVENTION, DRIVE_STATE } from '../utils/constants';
+import { COLORS, INTERVENTION } from '../utils/constants';
 
 const TICK_INTERVAL_MS = 200;
 
 export default function DriveScreen({ navigation, route: navRoute }) {
-  const { profile } = useAnxietyProfileStore();
-  const routeMeta = navRoute.params?.routeMeta ?? {};
+  const { profile, updateProfile } = useAnxietyProfileStore();
+  const routeMetaRef = useRef(navRoute.params?.routeMeta ?? {});
+  const routeMeta = routeMetaRef.current;
 
   const [sessionId] = useState(() => nanoid());
   const [stressScore, setStressScore] = useState(0);
@@ -30,6 +32,7 @@ export default function DriveScreen({ navigation, route: navRoute }) {
   const [hudEvent, setHudEvent] = useState(null);
   const [breathingActive, setBreathingActive] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [corridorState, setCorridorState] = useState(() => ConfidenceCorridorService.getCurrentState());
   const [obdConnection, setObdConnection] = useState(() => OBDService.getConnectionState());
   const [watchConnection, setWatchConnection] = useState(() => WatchService.getConnectionState());
 
@@ -38,10 +41,24 @@ export default function DriveScreen({ navigation, route: navRoute }) {
   const startTime = useRef(Date.now());
   const biometrics = useRef({ hr: null, hrv: null });
   const breathAnim = useRef(new Animated.Value(1)).current;
+  const initialProfileRef = useRef(profile);
+
+  const startBreathAnimation = useCallback(() => {
+    Animated.sequence([
+      Animated.timing(breathAnim, { toValue: 2, duration: 4000, useNativeDriver: true }),
+      Animated.timing(breathAnim, { toValue: 2, duration: 7000, useNativeDriver: true }),
+      Animated.timing(breathAnim, { toValue: 1, duration: 8000, useNativeDriver: true }),
+    ]).start(() => setBreathingActive(false));
+  }, [breathAnim]);
 
   // ─── Session start ─────────────────────────────────────────────────────────
   useEffect(() => {
-    IVISEngine.start(sessionId, profile);
+    IVISEngine.start(sessionId, initialProfileRef.current);
+    ConfidenceCorridorService.startSession(
+      initialProfileRef.current,
+      routeMeta,
+    );
+    setCorridorState(ConfidenceCorridorService.getCurrentState());
 
     // HUD listener
     const offHud = IVISEngine.onHUDUpdate((event) => {
@@ -75,9 +92,18 @@ export default function DriveScreen({ navigation, route: navRoute }) {
       const cvSignals = {}; // populated by edge via BLE/WebSocket in production
 
       await IVISEngine.processTick(obd, bio, cvSignals);
-      setStressScore(IVISEngine.getLastStressScore());
+      const nextStressScore = IVISEngine.getLastStressScore();
+      setStressScore(nextStressScore);
       setSpeed(obd?.speed ?? 0);
       setRpm(obd?.rpm ?? 0);
+      setCorridorState(
+        ConfidenceCorridorService.update({
+          elapsedSeconds: Math.floor((Date.now() - startTime.current) / 1000),
+          speedKmh: obd?.speed ?? 0,
+          stressScore: nextStressScore,
+          cvSignals,
+        })
+      );
     }, TICK_INTERVAL_MS);
 
     // Elapsed timer
@@ -93,16 +119,9 @@ export default function DriveScreen({ navigation, route: navRoute }) {
       offObdConnection();
       offWatchConnection();
       WatchService.stopStreaming();
+      ConfidenceCorridorService.stopSession();
     };
-  }, []);
-
-  const startBreathAnimation = () => {
-    Animated.sequence([
-      Animated.timing(breathAnim, { toValue: 2, duration: 4000, useNativeDriver: true }),
-      Animated.timing(breathAnim, { toValue: 2, duration: 7000, useNativeDriver: true }),
-      Animated.timing(breathAnim, { toValue: 1, duration: 8000, useNativeDriver: true }),
-    ]).start(() => setBreathingActive(false));
-  };
+  }, [routeMeta, sessionId, startBreathAnimation]);
 
   const endDrive = useCallback(async () => {
     Alert.alert('End Drive?', 'Are you sure you want to end this drive session?', [
@@ -117,21 +136,29 @@ export default function DriveScreen({ navigation, route: navRoute }) {
           WatchService.stopStreaming();
 
           const summary = IVISEngine.getSessionSummary();
+          const corridorSummary = ConfidenceCorridorService.getSessionSummary();
+          const nextConfidenceMemory = ConfidenceCorridorService.mergeProfileConfidence(profile, corridorSummary);
+          if (corridorSummary?.encountered) {
+            await updateProfile({ confidenceMemory: nextConfidenceMemory });
+          }
           await LocalStorage.saveDriveSession({
             id: sessionId,
             startedAt: new Date(startTime.current).toISOString(),
             endedAt: new Date().toISOString(),
             routeMeta,
-            telemetrySummary: {},
+            telemetrySummary: {
+              confidenceCorridor: corridorSummary,
+            },
             stressEvents: summary?.stressEvents ?? [],
             anxietyScoreAvg: summary?.anxietyScoreAvg ?? 0,
             peakStress: summary?.peakStress ?? 0,
           });
+          ConfidenceCorridorService.stopSession();
           navigation.replace('PostDrive', { sessionId, routeMeta });
         },
       },
     ]);
-  }, [sessionId, routeMeta]);
+  }, [navigation, profile, routeMeta, sessionId, updateProfile]);
 
   const stressColor = stressScore >= 85 ? COLORS.danger
     : stressScore >= 65 ? COLORS.warning
@@ -139,6 +166,11 @@ export default function DriveScreen({ navigation, route: navRoute }) {
     : COLORS.accent;
 
   const elapsedStr = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+  const corridorColor = corridorState?.status === 'stop'
+    ? COLORS.danger
+    : corridorState?.status === 'caution'
+      ? COLORS.warning
+      : COLORS.accent;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -154,6 +186,42 @@ export default function DriveScreen({ navigation, route: navRoute }) {
           <Text style={styles.endBtnText}>End</Text>
         </TouchableOpacity>
       </View>
+
+      {profile?.interventionPrefs?.confidenceCorridor !== false && corridorState?.mode !== 'idle' && (
+        <View style={[styles.corridorCard, { borderColor: `${corridorColor}66` }]}>
+          <View style={styles.corridorHeader}>
+            <View>
+              <Text style={[styles.corridorEyebrow, { color: corridorColor }]}>Spatial Confidence Corridor</Text>
+              <Text style={styles.corridorTitle}>{corridorState.segmentLabel || 'Tight passage assist'}</Text>
+            </View>
+            <View style={[styles.corridorStatusBadge, { backgroundColor: `${corridorColor}22` }]}>
+              <Text style={[styles.corridorStatusText, { color: corridorColor }]}>
+                {corridorState.statusLabel || 'Watching Ahead'}
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.corridorMessage}>{corridorState.message}</Text>
+
+          <View style={styles.corridorMetrics}>
+            <CorridorMetric label="Space to spare" value={corridorState.spareCm ? `${corridorState.spareCm} cm` : '-'} />
+            <CorridorMetric label="Vehicle width" value={corridorState.vehicleWidthCm ? `${corridorState.vehicleWidthCm} cm` : '-'} />
+            <CorridorMetric label="Target speed" value={corridorState.recommendedSpeedKmh !== undefined ? `${corridorState.recommendedSpeedKmh} km/h` : '-'} />
+          </View>
+
+          <View style={styles.corridorVisual}>
+            <View style={[styles.corridorRail, { backgroundColor: `${corridorColor}33` }]} />
+            <View style={styles.corridorVehicle}>
+              <Text style={styles.corridorVehicleText}>{corridorState.vehicleWidthCm ? `${corridorState.vehicleWidthCm} cm` : 'Car'}</Text>
+            </View>
+            <View style={[styles.corridorRail, { backgroundColor: `${corridorColor}33` }]} />
+          </View>
+
+          <Text style={styles.corridorTrust}>
+            {corridorState.tightPassageSuccesses ?? 0} successful tight passages | confidence {corridorState.spatialConfidenceScore ?? 18}/100
+          </Text>
+        </View>
+      )}
 
       {/* Stress gauge */}
       <View style={styles.gaugeSection}>
@@ -206,6 +274,15 @@ export default function DriveScreen({ navigation, route: navRoute }) {
   );
 }
 
+function CorridorMetric({ label, value }) {
+  return (
+    <View style={styles.corridorMetric}>
+      <Text style={styles.corridorMetricLabel}>{label}</Text>
+      <Text style={styles.corridorMetricValue}>{value}</Text>
+    </View>
+  );
+}
+
 function hudEventMessage(event) {
   switch (event.type) {
     case INTERVENTION.EMERGENCY_VEHICLE: return '🚨 Emergency vehicle – yield left';
@@ -224,6 +301,36 @@ const styles = StyleSheet.create({
   headerTime: { fontSize: 28, fontWeight: '900', color: COLORS.primary, marginTop: 2 },
   endBtn: { backgroundColor: COLORS.danger, borderRadius: 10, paddingHorizontal: 18, paddingVertical: 10 },
   endBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  corridorCard: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+  },
+  corridorHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  corridorEyebrow: { fontSize: 11, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 4 },
+  corridorTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text },
+  corridorStatusBadge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+  corridorStatusText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+  corridorMessage: { color: COLORS.textSecondary, fontSize: 14, lineHeight: 20, marginTop: 12 },
+  corridorMetrics: { flexDirection: 'row', marginTop: 14, gap: 10 },
+  corridorMetric: { flex: 1, backgroundColor: '#121621', borderRadius: 12, padding: 10 },
+  corridorMetricLabel: { color: COLORS.textSecondary, fontSize: 11, marginBottom: 4 },
+  corridorMetricValue: { color: COLORS.text, fontSize: 16, fontWeight: '800' },
+  corridorVisual: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 16 },
+  corridorRail: { flex: 1, height: 58, borderRadius: 14 },
+  corridorVehicle: {
+    width: 112,
+    height: 74,
+    borderRadius: 16,
+    backgroundColor: '#E7EDF8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  corridorVehicleText: { color: '#152033', fontSize: 14, fontWeight: '800' },
+  corridorTrust: { color: COLORS.textSecondary, fontSize: 12, marginTop: 14 },
   gaugeSection: { alignItems: 'center', paddingVertical: 32 },
   gaugeLabel: { fontSize: 14, color: COLORS.textSecondary, marginBottom: 8 },
   gaugeValue: { fontSize: 96, fontWeight: '900', lineHeight: 100 },

@@ -94,6 +94,14 @@ export default function HomeScreen({ navigation }) {
           </View>
         )}
 
+        <View style={styles.memoryCard}>
+          <Text style={styles.memoryLabel}>Tight-Space Confidence</Text>
+          <Text style={styles.memoryValue}>{profile?.confidenceMemory?.spatialConfidenceScore ?? 18}</Text>
+          <Text style={styles.memorySub}>
+            {profile?.confidenceMemory?.tightPassageSuccesses ?? 0} successful narrow passages remembered by the system
+          </Text>
+        </View>
+
         {/* Start drive CTA */}
         <TouchableOpacity
           style={styles.ctaButton}
@@ -136,6 +144,17 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 14, color: COLORS.textSecondary, marginBottom: 8 },
   statValue: { fontSize: 64, fontWeight: '900' },
   statSub: { fontSize: 13, color: COLORS.muted },
+  memoryCard: {
+    backgroundColor: '#111927',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: `${COLORS.primary}33`,
+  },
+  memoryLabel: { fontSize: 13, color: COLORS.primary, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
+  memoryValue: { fontSize: 48, fontWeight: '900', color: COLORS.text, marginTop: 10 },
+  memorySub: { fontSize: 13, color: COLORS.textSecondary, marginTop: 8, lineHeight: 18 },
   ctaButton: {
     backgroundColor: COLORS.primary,
     borderRadius: 16,

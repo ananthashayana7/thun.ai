@@ -59,6 +59,7 @@ class IVISEngine {
     this._driveState = DRIVE_STATE.ACTIVE;
     this._stressHistory = [];
     this._lastIntervention = {};
+    StressIndexService.reset();
     TTSService.setSpeed(0);
     console.log('[IVISEngine] started session:', sessionId);
   }
@@ -67,6 +68,7 @@ class IVISEngine {
     this._driveState = DRIVE_STATE.COMPLETED;
     TTSService.stopAll();
     this._emergencyActive = false;
+    StressIndexService.reset();
     console.log('[IVISEngine] stopped session:', this._sessionId);
   }
 

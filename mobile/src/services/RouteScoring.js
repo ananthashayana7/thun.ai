@@ -12,7 +12,6 @@ import axios from 'axios';
 import { ROUTE_WEIGHT, API } from '../utils/constants';
 
 const GMAPS_DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
-const GMAPS_PLACES_URL = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json';
 
 class RouteScoring {
   constructor() {
@@ -40,7 +39,7 @@ class RouteScoring {
     }
 
     const scored = await Promise.all(
-      routes.map((route) => this._scoreRoute(route))
+      routes.map((route) => this._scoreRoute(route, options.triggerPreferences || {}))
     );
 
     return scored.sort((a, b) => a.anxietyScore - b.anxietyScore);
@@ -65,7 +64,7 @@ class RouteScoring {
     return resp.data.routes;
   }
 
-  async _scoreRoute(route) {
+  async _scoreRoute(route, triggerPreferences = {}) {
     const leg = route.legs[0];
 
     // ── Factor 1: Live traffic congestion (from Google duration_in_traffic) ──
@@ -99,6 +98,7 @@ class RouteScoring {
 
     // ── Factor 5: Narrow lanes (infer from road type in steps) ──
     const narrowLaneScore = this._estimateNarrowLanes(steps);
+    const customTriggerScore = this._estimateCustomTriggerPenalty(steps, triggerPreferences);
 
     const breakdown = {
       liveTraffic: Math.round(liveTrafficScore),
@@ -106,15 +106,17 @@ class RouteScoring {
       accidentZones: Math.round(accidentScore),
       heavyVehicles: Math.round(heavyVehicleScore),
       narrowLanes: Math.round(narrowLaneScore),
+      customTriggers: Math.round(customTriggerScore),
     };
 
-    const anxietyScore = Math.round(
+    const baseAnxietyScore = (
       breakdown.heavyVehicles * ROUTE_WEIGHT.HEAVY_VEHICLE_DENSITY +
       breakdown.highwayMerge * ROUTE_WEIGHT.HIGHWAY_MERGE_FREQ +
       breakdown.accidentZones * ROUTE_WEIGHT.ACCIDENT_ZONES +
       breakdown.narrowLanes * ROUTE_WEIGHT.NARROW_LANES +
       breakdown.liveTraffic * ROUTE_WEIGHT.LIVE_TRAFFIC
     );
+    const anxietyScore = Math.round(baseAnxietyScore + customTriggerScore * 0.15);
 
     return {
       route,
@@ -137,6 +139,33 @@ class RouteScoring {
     const narrowKeywords = /lane|gully|service road|alley|internal road/i;
     const count = steps.filter((s) => narrowKeywords.test(s.html_instructions ?? '')).length;
     return Math.min(100, count * 15);
+  }
+
+  _estimateCustomTriggerPenalty(steps, triggerPreferences = {}) {
+    if (!triggerPreferences || Object.values(triggerPreferences).every((enabled) => !enabled)) {
+      return 0;
+    }
+
+    const instructions = steps.map((step) => step.html_instructions ?? '').join(' ');
+    let penalty = 0;
+
+    if (triggerPreferences.avoidFlyovers && /flyover|overpass|elevated/i.test(instructions)) {
+      penalty += 45;
+    }
+
+    if (triggerPreferences.avoidUTurns && /u-turn|u turn/i.test(instructions)) {
+      penalty += 55;
+    }
+
+    if (triggerPreferences.avoidHighwayMerges && /merge|ramp|motorway|expressway/i.test(instructions)) {
+      penalty += 40;
+    }
+
+    if (triggerPreferences.avoidNarrowLanes && /lane|gully|service road|alley|internal road/i.test(instructions)) {
+      penalty += 50;
+    }
+
+    return Math.min(100, penalty);
   }
 
   /** Minimal fallback: single route with neutral scores */

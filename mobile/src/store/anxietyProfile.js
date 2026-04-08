@@ -4,13 +4,26 @@
  */
 import { create } from 'zustand';
 import LocalStorage from '../services/LocalStorage';
+import { VEHICLE_DEFAULTS } from '../utils/constants';
 
 const DEFAULT_PROFILE = {
   onboardingComplete: false,
   userId: null,
   name: '',
+  anxietySensitivityScore: 35,
   // Anxiety questionnaire responses (GAD-7 inspired, driving-specific)
   questionnaire: {},
+  triggerPreferences: {
+    avoidFlyovers: false,
+    avoidUTurns: false,
+    avoidHighwayMerges: false,
+    avoidNarrowLanes: false,
+  },
+  vehicleProfile: {
+    label: VEHICLE_DEFAULTS.LABEL,
+    bodyWidthCm: VEHICLE_DEFAULTS.BODY_WIDTH_CM,
+    mirrorWidthCm: VEHICLE_DEFAULTS.MIRROR_WIDTH_CM,
+  },
   // Calibrated thresholds (auto-tuned per session)
   thresholds: {
     stressIndexTrigger: 65,   // 0-100, above this → intervention
@@ -24,9 +37,17 @@ const DEFAULT_PROFILE = {
     hudOverlay: true,
     breathingCue: true,
     laneGuidance: true,
+    confidenceCorridor: true,
   },
   // Language for TTS (Sarvam AI supports Indian regional langs)
   ttsLanguage: 'en-IN',
+  confidenceMemory: {
+    tightPassageSuccesses: 0,
+    tightPassageSessions: 0,
+    spatialConfidenceScore: 18,
+    bestTightPassageSpareCm: null,
+    lastPassageAt: null,
+  },
   // Running stats for adaptive threshold calibration
   calibration: {
     sessionCount: 0,

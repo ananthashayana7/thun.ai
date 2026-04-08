@@ -251,6 +251,41 @@ describe('POST /feedback/generate', () => {
       expect.any(String)
     );
   });
+
+  it('passes corridor telemetry into narrative generation', async () => {
+    query.mockResolvedValue({ rows: [{}] });
+    withTransaction.mockImplementation(async (fn) => {
+      const mockClient = { query: jest.fn() };
+      return fn(mockClient);
+    });
+
+    const telemetrySummary = {
+      confidenceCorridor: {
+        encountered: true,
+        successfulPassages: 1,
+        blockedPassages: 0,
+        bestSpareCm: 26,
+        confidenceBefore: 20,
+        confidenceAfter: 28,
+      },
+    };
+
+    const res = await request(app)
+      .post('/feedback/generate')
+      .set('Authorization', AUTH_HEADER)
+      .send({
+        sessionId: SESSION_ID,
+        anxietyScoreAvg: 40,
+        peakStress: 60,
+        telemetrySummary,
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(generateConfidenceNarrative).toHaveBeenCalledWith(
+      expect.objectContaining({ telemetrySummary }),
+      expect.any(String)
+    );
+  });
 });
 
 describe('POST /feedback/therapist', () => {

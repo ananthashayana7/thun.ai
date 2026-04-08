@@ -17,7 +17,7 @@ function handleValidationErrors(req, res, next) {
     return res.status(400).json({
       error: 'Validation failed',
       details: errors.array().map((e) => ({
-        field: e.param,
+        field: e.path,
         message: e.msg,
       })),
     });
@@ -70,6 +70,18 @@ const feedbackGenerateSchema = [
     .custom((obj) => {
       if (obj.summary && obj.summary.length > 200) {
         throw new Error('Route summary max 200 chars');
+      }
+      return true;
+    }),
+
+  body('telemetrySummary')
+    .optional()
+    .isObject()
+    .withMessage('Telemetry summary must be an object')
+    .custom((obj) => {
+      const totalSize = Buffer.byteLength(JSON.stringify(obj));
+      if (totalSize > 20_000) {
+        throw new Error('Telemetry summary payload too large (max 20KB)');
       }
       return true;
     }),

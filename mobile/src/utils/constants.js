@@ -43,6 +43,19 @@ export const ROUTE_WEIGHT = {
   LIVE_TRAFFIC: 0.15,
 };
 
+export const VEHICLE_DEFAULTS = {
+  LABEL: 'Compact SUV',
+  BODY_WIDTH_CM: 176,
+  MIRROR_WIDTH_CM: 182,
+};
+
+export const CONFIDENCE_CORRIDOR = {
+  GO_SPARE_CM: 30,
+  CAUTION_SPARE_CM: 18,
+  STOP_SPARE_CM: 8,
+  GOAL_SUCCESSFUL_PASSES: 10,
+};
+
 // ─── Colors ───────────────────────────────────────────────────────────────────
 export const COLORS = {
   primary: '#4F6EF7',

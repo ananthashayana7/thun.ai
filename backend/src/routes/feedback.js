@@ -30,7 +30,15 @@ router.post(
   feedbackGenerateSchema,
   async (req, res, next) => {
     try {
-      const { sessionId, anxietyScoreAvg, peakStress, stressEvents, routeMeta, driverProfile } = req.body;
+      const {
+        sessionId,
+        anxietyScoreAvg,
+        peakStress,
+        stressEvents,
+        routeMeta,
+        telemetrySummary,
+        driverProfile,
+      } = req.body;
 
       // Check if narrative already cached
       const cached = await query(
@@ -61,6 +69,7 @@ router.post(
           peakStress,
           stressEvents,
           routeMeta,
+          telemetrySummary,
         }, req.id),
         generateScenarioVariants(stressEvents || [], driverProfile || {}),
       ]);

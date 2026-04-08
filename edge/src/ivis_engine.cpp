@@ -11,6 +11,7 @@
 
 #include "ivis_engine.h"
 #include <chrono>
+#include "crypto_utils.h"
 #include <cstring>
 #include <iostream>
 #include <algorithm>
@@ -289,6 +290,20 @@ EngineOutput IVISEngine::tick(
     if (elapsed_us > 45'000) { // 45 ms warning threshold (target < 50 ms)
         std::cerr << "[IVISEngine] WARNING: tick latency " << elapsed_us << " us\n";
     }
+
+    // ── BLE characteristic update (encrypted) ─────────────────────────────
+#ifdef IVIS_REAL_HARDWARE
+    if (ble_handle_ >= 0) {
+        auto enc = crypto::encryptStressLevel(current_stress_, "production_device_key_0x01");
+        // In this mock BLE API, we combine the IV + Ciphertext for the radio frame
+        std::vector<uint8_t> payload;
+        payload.insert(payload.end(), enc.iv, enc.iv + 12);
+        payload.insert(payload.end(), enc.ciphertext.begin(), enc.ciphertext.end());
+        payload.insert(payload.end(), enc.tag, enc.tag + 16);
+        
+        ble_update_characteristic(ble_handle_, 0x2A56, payload.data(), payload.size());
+    }
+#endif
 
     if (output_cb_) {
         output_cb_(out);

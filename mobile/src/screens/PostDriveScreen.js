@@ -3,7 +3,7 @@
  * Post-drive feedback – shows stress timeline, confidence narrative (LLM),
  * and synthetic scenario variants for stress events.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, ScrollView,
   ActivityIndicator, TouchableOpacity,
@@ -15,7 +15,7 @@ import { useAnxietyProfileStore } from '../store/anxietyProfile';
 import dayjs from 'dayjs';
 
 export default function PostDriveScreen({ navigation, route: navRoute }) {
-  const { sessionId, routeMeta, fromHistory } = navRoute.params ?? {};
+  const { sessionId, fromHistory } = navRoute.params ?? {};
   const { profile, updateThresholds } = useAnxietyProfileStore();
   const feedbackRequestKey = sessionId ? `feedback.generate.${sessionId}` : null;
 
@@ -25,10 +25,7 @@ export default function PostDriveScreen({ navigation, route: navRoute }) {
   const [loading, setLoading] = useState(true);
   const [feedbackError, setFeedbackError] = useState(null);
   const [feedbackPending, setFeedbackPending] = useState(false);
-
-  useEffect(() => {
-    if (sessionId) loadSession();
-  }, [sessionId]);
+  const loadedSessionRef = useRef(null);
 
   useEffect(() => {
     if (!feedbackRequestKey) return undefined;
@@ -50,7 +47,49 @@ export default function PostDriveScreen({ navigation, route: navRoute }) {
     return unsubscribe;
   }, [feedbackRequestKey]);
 
-  const loadSession = async () => {
+  const fetchFeedback = useCallback(async (sessionData) => {
+    if (!sessionData || !feedbackRequestKey) return;
+
+    try {
+      const result = await SyncService.request({
+        requestKey: feedbackRequestKey,
+        method: 'POST',
+        url: `${API.BASE_URL}/feedback/generate`,
+        body: {
+          sessionId,
+          anxietyScoreAvg: sessionData.anxiety_score_avg,
+          peakStress: sessionData.peak_stress,
+          stressEvents: sessionData.stressEvents?.slice(0, 10),
+          routeMeta: sessionData.routeMeta,
+          telemetrySummary: sessionData.telemetrySummary,
+          driverProfile: {
+            name: profile?.name,
+            thresholds: profile?.thresholds,
+          },
+        },
+        timeout: 35_000,
+        cacheOnSuccess: true,
+        queueIfOffline: true,
+        dedupeCompleted: true,
+      });
+
+      if (result.status === 'success') {
+        setNarrative(result.data?.narrative ?? null);
+        setScenarios(result.data?.scenarios ?? []);
+        setFeedbackPending(false);
+        setFeedbackError(null);
+      }
+
+      if (result.status === 'queued') {
+        setFeedbackPending(true);
+        setFeedbackError('Feedback request queued. It will complete automatically when the connection returns.');
+      }
+    } catch (err) {
+      setFeedbackError('Could not generate AI feedback. Please check your connection.');
+    }
+  }, [feedbackRequestKey, profile?.name, profile?.thresholds, sessionId]);
+
+  const loadSession = useCallback(async () => {
     setLoading(true);
     const data = await LocalStorage.getDriveSession(sessionId);
     setSession(data);
@@ -79,48 +118,24 @@ export default function PostDriveScreen({ navigation, route: navRoute }) {
     }
 
     setLoading(false);
-  };
+  }, [
+    feedbackRequestKey,
+    fetchFeedback,
+    fromHistory,
+    narrative,
+    profile?.thresholds?.stressIndexTrigger,
+    sessionId,
+    updateThresholds,
+  ]);
 
-  const fetchFeedback = async (sessionData) => {
-    if (!sessionData || !feedbackRequestKey) return;
-
-    try {
-      const result = await SyncService.request({
-        requestKey: feedbackRequestKey,
-        method: 'POST',
-        url: `${API.BASE_URL}/feedback/generate`,
-        body: {
-          sessionId,
-          anxietyScoreAvg: sessionData.anxiety_score_avg,
-          peakStress: sessionData.peak_stress,
-          stressEvents: sessionData.stressEvents?.slice(0, 10),
-          routeMeta: sessionData.routeMeta,
-          driverProfile: {
-            name: profile?.name,
-            thresholds: profile?.thresholds,
-          },
-        },
-        timeout: 35_000,
-        cacheOnSuccess: true,
-        queueIfOffline: true,
-        dedupeCompleted: true,
-      });
-
-      if (result.status === 'success') {
-        setNarrative(result.data?.narrative ?? null);
-        setScenarios(result.data?.scenarios ?? []);
-        setFeedbackPending(false);
-        setFeedbackError(null);
-      }
-
-      if (result.status === 'queued') {
-        setFeedbackPending(true);
-        setFeedbackError('Feedback request queued. It will complete automatically when the connection returns.');
-      }
-    } catch (err) {
-      setFeedbackError('Could not generate AI feedback. Please check your connection.');
+  useEffect(() => {
+    if (!sessionId || loadedSessionRef.current === sessionId) {
+      return;
     }
-  };
+
+    loadedSessionRef.current = sessionId;
+    loadSession();
+  }, [loadSession, sessionId]);
 
   if (loading) {
     return (
@@ -136,6 +151,7 @@ export default function PostDriveScreen({ navigation, route: navRoute }) {
   const avg = session?.anxiety_score_avg ?? 0;
   const peak = session?.peak_stress ?? 0;
   const eventCount = session?.stressEvents?.length ?? 0;
+  const corridorSummary = session?.telemetrySummary?.confidenceCorridor;
 
   const scoreColor = avg >= STRESS.CRITICAL ? COLORS.danger
     : avg >= STRESS.HIGH ? COLORS.warning
@@ -168,6 +184,33 @@ export default function PostDriveScreen({ navigation, route: navRoute }) {
             <Text style={styles.scoreLabel}>Stress Events</Text>
           </View>
         </View>
+
+        {corridorSummary?.encountered && (
+          <>
+            <Text style={styles.sectionTitle}>Spatial Confidence</Text>
+            <View style={styles.corridorCard}>
+              <View style={styles.corridorStats}>
+                <View style={styles.corridorStat}>
+                  <Text style={styles.corridorStatValue}>{corridorSummary.successfulPassages}</Text>
+                  <Text style={styles.corridorStatLabel}>Successful passages</Text>
+                </View>
+                <View style={styles.corridorStat}>
+                  <Text style={styles.corridorStatValue}>{corridorSummary.bestSpareCm ?? '-'}</Text>
+                  <Text style={styles.corridorStatLabel}>Best spare cm</Text>
+                </View>
+                <View style={styles.corridorStat}>
+                  <Text style={styles.corridorStatValue}>{corridorSummary.confidenceAfter ?? corridorSummary.confidenceBefore}</Text>
+                  <Text style={styles.corridorStatLabel}>Confidence after</Text>
+                </View>
+              </View>
+              <Text style={styles.corridorNarrative}>
+                {corridorSummary.blockedPassages > 0
+                  ? 'The system helped you pause before a space that was too tight. That is a correct defensive decision, not a failure.'
+                  : `You cleared ${corridorSummary.successfulPassages} tight passage${corridorSummary.successfulPassages === 1 ? '' : 's'} and converted that into confidence memory for the next drive.`}
+              </Text>
+            </View>
+          </>
+        )}
 
         {/* AI Narrative */}
         <Text style={styles.sectionTitle}>Confidence Report</Text>
@@ -259,6 +302,19 @@ const styles = StyleSheet.create({
   },
   scenarioTitle: { fontSize: 15, fontWeight: '700', color: COLORS.text, marginBottom: 6 },
   scenarioBody: { fontSize: 14, color: COLORS.textSecondary, lineHeight: 21 },
+  corridorCard: {
+    backgroundColor: '#111927',
+    borderRadius: 14,
+    padding: 18,
+    marginBottom: 28,
+    borderWidth: 1,
+    borderColor: `${COLORS.primary}33`,
+  },
+  corridorStats: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
+  corridorStat: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 12, padding: 12, alignItems: 'center' },
+  corridorStatValue: { fontSize: 24, fontWeight: '900', color: COLORS.text },
+  corridorStatLabel: { fontSize: 11, color: COLORS.textSecondary, marginTop: 4, textAlign: 'center' },
+  corridorNarrative: { fontSize: 14, color: COLORS.textSecondary, lineHeight: 21, marginTop: 14 },
   doneBtn: {
     backgroundColor: COLORS.primary,
     borderRadius: 14,

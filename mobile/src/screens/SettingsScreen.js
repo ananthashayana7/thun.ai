@@ -8,8 +8,6 @@ import {
   Switch, TouchableOpacity, Alert, TextInput,
 } from 'react-native';
 import { useAnxietyProfileStore } from '../store/anxietyProfile';
-import OBDService from '../services/OBDService';
-import WatchService from '../services/WatchService';
 import { COLORS } from '../utils/constants';
 
 const LANGUAGES = [
@@ -23,14 +21,27 @@ export default function SettingsScreen({ navigation }) {
   const { profile, updateProfile, updateThresholds, resetProfile } = useAnxietyProfileStore();
 
   const [prefs, setPrefs] = useState(profile?.interventionPrefs ?? {
-    calmAudio: true, hudOverlay: true, breathingCue: true, laneGuidance: true,
+    calmAudio: true, hudOverlay: true, breathingCue: true, laneGuidance: true, confidenceCorridor: true,
+  });
+  const [triggerPrefs, setTriggerPrefs] = useState(profile?.triggerPreferences ?? {
+    avoidFlyovers: false,
+    avoidUTurns: false,
+    avoidHighwayMerges: false,
+    avoidNarrowLanes: false,
   });
   const [threshold, setThreshold] = useState(String(profile?.thresholds?.stressIndexTrigger ?? 65));
+  const [vehicleWidth, setVehicleWidth] = useState(String(profile?.vehicleProfile?.mirrorWidthCm ?? 182));
 
   const togglePref = async (key) => {
     const next = { ...prefs, [key]: !prefs[key] };
     setPrefs(next);
     await updateProfile({ interventionPrefs: next });
+  };
+
+  const toggleTriggerPref = async (key) => {
+    const next = { ...triggerPrefs, [key]: !triggerPrefs[key] };
+    setTriggerPrefs(next);
+    await updateProfile({ triggerPreferences: next });
   };
 
   const saveThreshold = async () => {
@@ -41,6 +52,22 @@ export default function SettingsScreen({ navigation }) {
     }
     await updateThresholds({ stressIndexTrigger: val });
     Alert.alert('Saved', 'Stress trigger threshold updated.');
+  };
+
+  const saveVehicleWidth = async () => {
+    const val = parseInt(vehicleWidth, 10);
+    if (isNaN(val) || val < 145 || val > 240) {
+      Alert.alert('Invalid width', 'Enter your mirror-to-mirror width between 145 cm and 240 cm.');
+      return;
+    }
+
+    await updateProfile({
+      vehicleProfile: {
+        ...(profile?.vehicleProfile || {}),
+        mirrorWidthCm: val,
+      },
+    });
+    Alert.alert('Saved', 'Vehicle width updated. Narrow-lane guidance will use the new width.');
   };
 
   const handleReset = () => {
@@ -61,6 +88,24 @@ export default function SettingsScreen({ navigation }) {
         {/* Profile */}
         <SectionHeader title="Profile" />
         <InfoRow label="Name" value={profile?.name || '—'} />
+
+        <InfoRow label="Spatial confidence" value={`${profile?.confidenceMemory?.spatialConfidenceScore ?? 18}/100`} />
+
+        <SectionHeader title="Vehicle Profile" />
+        <View style={styles.row}>
+          <Text style={styles.label}>Mirror-to-mirror width (cm)</Text>
+          <TextInput
+            style={styles.thresholdInput}
+            value={vehicleWidth}
+            onChangeText={setVehicleWidth}
+            keyboardType="number-pad"
+            maxLength={3}
+          />
+        </View>
+        <TouchableOpacity style={styles.saveBtn} onPress={saveVehicleWidth}>
+          <Text style={styles.saveBtnText}>Save Vehicle Width</Text>
+        </TouchableOpacity>
+        <Text style={styles.hint}>This width powers the green or red confidence corridor in tight spaces.</Text>
 
         {/* Stress threshold */}
         <SectionHeader title="Intervention Threshold" />
@@ -94,6 +139,34 @@ export default function SettingsScreen({ navigation }) {
               onValueChange={() => togglePref(key)}
               trackColor={{ true: COLORS.primary }}
               thumbColor={prefs[key] ? '#fff' : COLORS.muted}
+            />
+          </View>
+        ))}
+
+        <View style={styles.switchRow}>
+          <Text style={styles.switchLabel}>Narrow-lane confidence corridor</Text>
+          <Switch
+            value={prefs.confidenceCorridor ?? true}
+            onValueChange={() => togglePref('confidenceCorridor')}
+            trackColor={{ true: COLORS.primary }}
+            thumbColor={(prefs.confidenceCorridor ?? true) ? '#fff' : COLORS.muted}
+          />
+        </View>
+
+        <SectionHeader title="Route Trigger Preferences" />
+        {[
+          ['avoidNarrowLanes', 'Avoid narrow lanes when possible'],
+          ['avoidHighwayMerges', 'Avoid highway merges when possible'],
+          ['avoidFlyovers', 'Avoid flyovers when possible'],
+          ['avoidUTurns', 'Avoid U-turns when possible'],
+        ].map(([key, label]) => (
+          <View key={key} style={styles.switchRow}>
+            <Text style={styles.switchLabel}>{label}</Text>
+            <Switch
+              value={triggerPrefs[key] ?? false}
+              onValueChange={() => toggleTriggerPref(key)}
+              trackColor={{ true: COLORS.primary }}
+              thumbColor={(triggerPrefs[key] ?? false) ? '#fff' : COLORS.muted}
             />
           </View>
         ))}
