@@ -95,11 +95,29 @@ export const API = {
   GOOGLE_MAPS_KEY: process.env.GOOGLE_MAPS_API_KEY || '',
 };
 
+export const APP_RUNTIME = {
+  ENVIRONMENT: __DEV__ ? 'development' : 'production',
+  SECURE_STORAGE_ALIAS: 'thunai_sqlcipher',
+  SECURE_STORAGE_REQUIRED: !__DEV__,
+};
+
 // ─── SQLite ───────────────────────────────────────────────────────────────────
 export const DB = {
   NAME: 'thunai.db',
   VERSION: '1.0',
   DRIVE_HISTORY_DAYS: 90,
+};
+
+export const PRIVACY = {
+  CONSENT_VERSION: '2026-04-11',
+  DEFAULTS: {
+    telemetryUpload: true,
+    biometricsProcessing: true,
+    therapistTranscriptRetention: false,
+    marketingUpdates: false,
+    dataExportRequestedAt: null,
+    deletionRequestedAt: null,
+  },
 };
 
 // ─── Biometric Ranges ─────────────────────────────────────────────────────────

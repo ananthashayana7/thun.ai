@@ -9,7 +9,11 @@ import {
 } from 'react-native';
 import { useAnxietyProfileStore } from '../store/anxietyProfile';
 import LocalStorage from '../services/LocalStorage';
-import { COLORS, STRESS } from '../utils/constants';
+import OBDService from '../services/OBDService';
+import WatchService from '../services/WatchService';
+import TTSService from '../services/TTSService';
+import SyncService from '../services/SyncService';
+import { API, COLORS, STRESS } from '../utils/constants';
 import dayjs from 'dayjs';
 
 function StressBadge({ score }) {
@@ -44,10 +48,46 @@ function DriveCard({ session, onPress }) {
   );
 }
 
+function statusTone(status) {
+  switch (status) {
+    case 'live':
+    case 'connected':
+    case 'online':
+      return COLORS.accent;
+    case 'fallback':
+    case 'reconnecting':
+      return COLORS.warning;
+    case 'offline':
+    case 'not_wired':
+    case 'disconnected':
+      return COLORS.danger;
+    default:
+      return COLORS.textSecondary;
+  }
+}
+
+function RuntimeRow({ label, value, status }) {
+  const color = statusTone(status);
+  return (
+    <View style={styles.runtimeRow}>
+      <Text style={styles.runtimeLabel}>{label}</Text>
+      <View style={[styles.runtimeBadge, { backgroundColor: `${color}22` }]}> 
+        <Text style={[styles.runtimeBadgeText, { color }]}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function HomeScreen({ navigation }) {
   const { profile } = useAnxietyProfileStore();
   const [sessions, setSessions] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [runtimeStatus, setRuntimeStatus] = useState(() => ({
+    obd: OBDService.getConnectionState(),
+    watch: WatchService.getConnectionState(),
+    tts: TTSService.getRuntimeStatus(),
+    sync: SyncService.getConnectionStatus(),
+  }));
 
   const load = useCallback(async () => {
     const data = await LocalStorage.getDriveSessions(20);
@@ -55,6 +95,21 @@ export default function HomeScreen({ navigation }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const refreshRuntime = () => {
+      setRuntimeStatus({
+        obd: OBDService.getConnectionState(),
+        watch: WatchService.getConnectionState(),
+        tts: TTSService.getRuntimeStatus(),
+        sync: SyncService.getConnectionStatus(),
+      });
+    };
+
+    refreshRuntime();
+    const timer = setInterval(refreshRuntime, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -65,6 +120,26 @@ export default function HomeScreen({ navigation }) {
   const avgStress = sessions.length > 0
     ? Math.round(sessions.slice(0, 7).reduce((s, d) => s + (d.anxiety_score_avg ?? 0), 0) / Math.min(sessions.length, 7))
     : null;
+
+  const obdStatus = runtimeStatus.obd.reconnecting
+    ? { text: 'Reconnecting', state: 'reconnecting' }
+    : runtimeStatus.obd.connected
+      ? { text: 'Connected', state: 'connected' }
+      : { text: 'Disconnected', state: 'disconnected' };
+
+  const watchStatus = runtimeStatus.watch.reconnecting
+    ? { text: 'Reconnecting', state: 'reconnecting' }
+    : runtimeStatus.watch.connected
+      ? { text: 'Connected', state: 'connected' }
+      : { text: 'Disconnected', state: 'disconnected' };
+
+  const voiceStatus = runtimeStatus.tts.sarvamConfigured
+    ? { text: `Sarvam live (${runtimeStatus.tts.language})`, state: 'live' }
+    : { text: `Native fallback (${runtimeStatus.tts.language})`, state: 'fallback' };
+
+  const backendStatus = runtimeStatus.sync.connected
+    ? { text: 'Online', state: 'online' }
+    : { text: 'Offline / queueing', state: 'offline' };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -100,6 +175,30 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.memorySub}>
             {profile?.confidenceMemory?.tightPassageSuccesses ?? 0} successful narrow passages remembered by the system
           </Text>
+        </View>
+
+        <View style={styles.realityCard}>
+          <Text style={styles.realityLabel}>Runtime Reality</Text>
+          <Text style={styles.realityTitle}>What this build is actually using right now</Text>
+          <Text style={styles.realityBody}>
+            This panel reports active runtime paths, fallback behavior, and integrations that are not wired into the mobile app.
+          </Text>
+
+          <RuntimeRow label="Backend sync" value={backendStatus.text} status={backendStatus.state} />
+          <RuntimeRow label="OBD adapter" value={obdStatus.text} status={obdStatus.state} />
+          <RuntimeRow label="Watch sensor" value={watchStatus.text} status={watchStatus.state} />
+          <RuntimeRow label="Voice engine" value={voiceStatus.text} status={voiceStatus.state} />
+          <RuntimeRow label="ElevenLabs in mobile" value="Not wired" status="not_wired" />
+          <RuntimeRow label="Ollama in mobile" value="Not wired" status="not_wired" />
+
+          <View style={styles.realityFooter}>
+            <Text style={styles.realityFootnote}>API endpoint: {API.BASE_URL}</Text>
+            <Text style={styles.realityFootnote}>
+              {runtimeStatus.tts.silenced
+                ? `Voice muted above ${runtimeStatus.tts.speedGateKmh} km/h for safety`
+                : `Voice safety gate at ${runtimeStatus.tts.speedGateKmh} km/h`}
+            </Text>
+          </View>
         </View>
 
         {/* Start drive CTA */}
@@ -155,6 +254,36 @@ const styles = StyleSheet.create({
   memoryLabel: { fontSize: 13, color: COLORS.primary, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
   memoryValue: { fontSize: 48, fontWeight: '900', color: COLORS.text, marginTop: 10 },
   memorySub: { fontSize: 13, color: COLORS.textSecondary, marginTop: 8, lineHeight: 18 },
+  realityCard: {
+    backgroundColor: '#111318',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#232A37',
+  },
+  realityLabel: {
+    fontSize: 12,
+    color: COLORS.warning,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  realityTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text, marginTop: 8 },
+  realityBody: { fontSize: 14, color: COLORS.textSecondary, lineHeight: 20, marginTop: 8, marginBottom: 16 },
+  runtimeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#1D2330',
+  },
+  runtimeLabel: { color: COLORS.text, fontSize: 14, fontWeight: '600' },
+  runtimeBadge: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  runtimeBadgeText: { fontSize: 12, fontWeight: '800' },
+  realityFooter: { marginTop: 14, gap: 6 },
+  realityFootnote: { fontSize: 12, color: COLORS.textSecondary },
   ctaButton: {
     backgroundColor: COLORS.primary,
     borderRadius: 16,

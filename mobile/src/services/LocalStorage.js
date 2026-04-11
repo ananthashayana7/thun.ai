@@ -4,23 +4,36 @@
  * Uses react-native-sqlite-storage.
  */
 import SQLite from 'react-native-sqlite-storage';
-import { DB } from '../utils/constants';
+import { DB, PRIVACY } from '../utils/constants';
 import dayjs from 'dayjs';
+import SecureKeyManager from './SecureKeyManager';
 
 SQLite.enablePromise(true);
 
 let _db = null;
+let _dbInitPromise = null;
 
 async function getDb() {
-  _db = await SQLite.openDatabase({
-    name: DB.NAME,
-    location: 'default',
-    // In production, we must use SQLite encryption (SQLCipher) to protect biometric data at rest.
-    // The key should be obtained from a secure source like the phone's Keychain/Keystore.
-    key: process.env.DB_ENCRYPTION_KEY || 'default-secure-passphrase-0x987654321', // TODO: use native key management
-  });
-  await _initSchema(_db);
-  return _db;
+  if (_db) return _db;
+  if (_dbInitPromise) return _dbInitPromise;
+
+  _dbInitPromise = (async () => {
+    const key = await SecureKeyManager.getDatabaseKey();
+    _db = await SQLite.openDatabase({
+      name: DB.NAME,
+      location: 'default',
+      key,
+    });
+    await _initSchema(_db);
+    return _db;
+  })();
+
+  try {
+    return await _dbInitPromise;
+  } catch (error) {
+    _dbInitPromise = null;
+    throw error;
+  }
 }
 
 async function _initSchema(db) {
@@ -84,9 +97,21 @@ async function _initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_sync_queue_status_attempt ON sync_queue (status, next_attempt_at);
   `);
 
+  await db.executeSql(`
+    CREATE TABLE IF NOT EXISTS privacy_settings (
+      id INTEGER PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
   // Purge sessions older than 90 days automatically
   const cutoff = dayjs().subtract(DB.DRIVE_HISTORY_DAYS, 'day').toISOString();
   await db.executeSql(`DELETE FROM drive_sessions WHERE created_at < ?;`, [cutoff]);
+  await db.executeSql(
+    `INSERT OR IGNORE INTO privacy_settings (id, data) VALUES (1, ?);`,
+    [JSON.stringify(PRIVACY.DEFAULTS)]
+  );
 }
 
 // ─── Profile CRUD ─────────────────────────────────────────────────────────────
@@ -317,9 +342,61 @@ async function getLatestCompletedSyncResult(requestKey) {
   return request;
 }
 
+async function getSyncQueueStats() {
+  const db = await getDb();
+  const [result] = await db.executeSql(
+    `SELECT
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+        SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS processing_count,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_count
+     FROM sync_queue;`
+  );
+
+  const row = result.rows.item(0) || {};
+  return {
+    pending: row.pending_count || 0,
+    processing: row.processing_count || 0,
+    completed: row.completed_count || 0,
+  };
+}
+
 async function deleteSyncRequest(requestKey) {
   const db = await getDb();
   await db.executeSql(`DELETE FROM sync_queue WHERE request_key = ?;`, [requestKey]);
+}
+
+async function getPrivacySettings() {
+  const db = await getDb();
+  const [result] = await db.executeSql(`SELECT data FROM privacy_settings WHERE id = 1;`);
+  if (result.rows.length === 0) return { ...PRIVACY.DEFAULTS };
+  return {
+    ...PRIVACY.DEFAULTS,
+    ...JSON.parse(result.rows.item(0).data),
+  };
+}
+
+async function savePrivacySettings(settings) {
+  const db = await getDb();
+  await db.executeSql(
+    `INSERT OR REPLACE INTO privacy_settings (id, data, updated_at) VALUES (1, ?, ?);`,
+    [JSON.stringify(settings), new Date().toISOString()]
+  );
+}
+
+async function clearAllData() {
+  const db = await getDb();
+  await db.executeSql(`DELETE FROM interventions;`);
+  await db.executeSql(`DELETE FROM drive_sessions;`);
+  await db.executeSql(`DELETE FROM sync_queue;`);
+  await db.executeSql(`DELETE FROM profile;`);
+  await db.executeSql(
+    `INSERT OR REPLACE INTO privacy_settings (id, data, updated_at) VALUES (1, ?, ?);`,
+    [JSON.stringify(PRIVACY.DEFAULTS), new Date().toISOString()]
+  );
+}
+
+async function getRuntimeStorageStatus() {
+  return SecureKeyManager.getStatus();
 }
 
 async function closeDb() {
@@ -327,6 +404,7 @@ async function closeDb() {
     await _db.close();
     _db = null;
   }
+  _dbInitPromise = null;
 }
 
 export default {
@@ -342,6 +420,11 @@ export default {
   getPendingSyncRequests,
   updateSyncRequestStatus,
   getLatestCompletedSyncResult,
+  getSyncQueueStats,
   deleteSyncRequest,
+  getPrivacySettings,
+  savePrivacySettings,
+  clearAllData,
+  getRuntimeStorageStatus,
   closeDb,
 };

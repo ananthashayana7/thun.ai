@@ -35,6 +35,8 @@ class OBDService {
     this._isConnected = false;
     this._manualDisconnect = false;
     this._consecutivePollErrors = 0;
+    this._lastError = null;
+    this._lastHeartbeatAt = null;
   }
 
   async connect(deviceAddress, opts = {}) {
@@ -53,11 +55,13 @@ class OBDService {
       this._isConnected = true;
       this._isReconnecting = false;
       this._consecutivePollErrors = 0;
+      this._lastError = null;
       this._emitConnectionState('connected');
       return true;
     } catch (err) {
       console.error('[OBDService] connect error:', err);
       this._isConnected = false;
+      this._lastError = err?.message || 'Unknown connect error';
       this._emitConnectionState('disconnected', err);
       return false;
     }
@@ -111,6 +115,7 @@ class OBDService {
         timestamp: Date.now(),
         healthy: cycleErrors === 0,
       };
+      this._lastHeartbeatAt = this._lastPollSnapshot.timestamp;
       this._listeners.forEach((cb) => cb(telemetry));
     }, POLL_INTERVAL_MS);
   }
@@ -139,6 +144,18 @@ class OBDService {
     this._isConnected = false;
     this._isReconnecting = false;
     this._emitConnectionState('disconnected');
+  }
+
+  async ensureConnection() {
+    if (this._isConnected || this._isReconnecting || !this._deviceAddress) {
+      return this._isConnected;
+    }
+
+    const connected = await this.connect(this._deviceAddress, { resetBackoff: false });
+    if (connected) {
+      this.startPolling();
+    }
+    return connected;
   }
 
   async _queryPID(pid) {
@@ -192,11 +209,13 @@ class OBDService {
   }
 
   _emitConnectionState(state, error = null, meta = {}) {
+    this._lastError = error ? error.message : this._lastError;
     const payload = {
       state,
       connected: state === 'connected',
       reconnectAttempts: this._reconnectAttempts,
       error: error ? error.message : null,
+      lastHeartbeatAt: this._lastHeartbeatAt,
       ...meta,
     };
     this._connectionListeners.forEach((cb) => cb(payload));
@@ -254,6 +273,8 @@ class OBDService {
       reconnectAttempts: this._reconnectAttempts,
       lastPollSnapshot: this._lastPollSnapshot,
       deviceAddress: this._deviceAddress,
+      lastError: this._lastError,
+      lastHeartbeatAt: this._lastHeartbeatAt,
     };
   }
 }

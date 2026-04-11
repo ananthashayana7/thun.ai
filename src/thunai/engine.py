@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from thunai.config import ThunaiConfig, load_config
+from thunai.config import ThunaiConfig, load_config, validate_runtime_config
 from thunai.features.ivis import IVISEngine, OBDSnapshot
 from thunai.features.post_drive import DriveSummary, PostDriveAnalyser
 from thunai.features.pre_drive import PreDriveAdvisor, Route, UserAnxietyProfile
@@ -190,6 +190,7 @@ class ThunaiEngine:
             "deployment": self._config.deployment.model_dump(),
             "providers": self.get_provider_info(),
             "synthetic_data": self._config.synthetic_data.model_dump(),
+            "config_validation": validate_runtime_config(self._config),
         }
 
     def export_synthetic_dataset(

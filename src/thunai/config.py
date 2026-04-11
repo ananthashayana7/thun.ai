@@ -45,6 +45,7 @@ def _load_dotenv() -> None:
 class AppConfig(BaseModel):
     name: str = "thun.ai"
     version: str = "0.1.0"
+    profile: str = "development"
     log_level: str = "INFO"
     speed_silence_threshold_kmh: float = 80.0
 
@@ -319,6 +320,7 @@ def load_config(
     config_dir: Path | None = None,
     *,
     as_dict: bool = False,
+    profile: str | None = None,
 ) -> ThunaiConfig | dict:
     """
     Load configuration from YAML files and environment variable overrides.
@@ -349,6 +351,16 @@ def load_config(
                 raw = _deep_merge(raw, loaded)
                 logger.debug("Loaded config from %s", path)
 
+        selected_profile = profile or os.environ.get("THUNAI_PROFILE")
+        if selected_profile:
+            profile_path = config_dir / "profiles" / f"{selected_profile}.yaml"
+            if not profile_path.exists():
+                raise FileNotFoundError(f"Config profile not found: {profile_path}")
+            with open(profile_path) as fh:
+                loaded = yaml.safe_load(fh) or {}
+            raw = _deep_merge(raw, loaded)
+            logger.debug("Loaded config profile from %s", profile_path)
+
     raw = _apply_env_overrides(raw)
     raw = _resolve_env_vars(raw)
 
@@ -371,6 +383,69 @@ def get(section: str, *keys: str, default: Any = None) -> Any:
             return default
         node = node.get(key, default)
     return node
+
+
+def validate_runtime_config(config: ThunaiConfig) -> dict[str, Any]:
+    """Validate whether the selected config is deployment-safe for its profile."""
+    blockers: list[str] = []
+    warnings: list[str] = []
+    profile = config.app.profile or "development"
+
+    if profile == "development":
+        warnings.append("Development profile allows stub providers and simulated hardware paths.")
+        return {
+            "profile": profile,
+            "status": "warning",
+            "blockers": blockers,
+            "warnings": warnings,
+        }
+
+    if config.slm.provider == "stub":
+        blockers.append("SLM provider cannot be stub outside development.")
+
+    if config.perception.backend == "stub":
+        blockers.append("Perception backend cannot be stub outside development.")
+
+    if config.llm.provider == "stub":
+        blockers.append("LLM provider cannot be stub outside development.")
+
+    if config.voice.provider == "stub":
+        blockers.append("Voice provider cannot be stub outside development.")
+
+    if config.navigation.provider == "stub":
+        blockers.append("Navigation provider cannot be stub outside development.")
+
+    llm_env = {
+        "gemini": config.llm.gemini.api_key_env,
+        "openai": config.llm.openai.api_key_env,
+    }.get(config.llm.provider)
+    if llm_env and not os.environ.get(llm_env):
+        blockers.append(f"Missing required LLM credential: {llm_env}")
+
+    if config.voice.provider == "sarvam" and not os.environ.get(config.voice.sarvam.api_key_env):
+        blockers.append(f"Missing required voice credential: {config.voice.sarvam.api_key_env}")
+
+    if config.navigation.provider == "googlemaps" and not os.environ.get(config.navigation.googlemaps.api_key_env):
+        blockers.append(f"Missing required navigation credential: {config.navigation.googlemaps.api_key_env}")
+
+    if config.perception.backend == "yolo" and not Path(config.perception.yolo.model_path).exists():
+        blockers.append(f"Perception model not found: {config.perception.yolo.model_path}")
+
+    if config.slm.provider == "phi3" and not Path(config.slm.phi3.model_path).exists():
+        blockers.append(f"SLM model not found: {config.slm.phi3.model_path}")
+
+    if config.slm.provider == "mistral" and not Path(config.slm.mistral.model_path).exists():
+        blockers.append(f"SLM model not found: {config.slm.mistral.model_path}")
+
+    if config.voice.provider == "system":
+        warnings.append("System voice is acceptable for pilot builds but should be field-validated per OEM target.")
+
+    return {
+        "profile": profile,
+        "status": "blocked" if blockers else ("warning" if warnings else "ready"),
+        "blockers": blockers,
+        "warnings": warnings,
+    }
 
 
 # External reference tests expect ``load_config.cache_clear()`` to exist (mirroring

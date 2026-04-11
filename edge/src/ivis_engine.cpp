@@ -12,6 +12,7 @@
 #include "ivis_engine.h"
 #include <chrono>
 #include "crypto_utils.h"
+#include "runtime_config.h"
 #include <cstring>
 #include <iostream>
 #include <algorithm>
@@ -28,6 +29,13 @@
 #endif
 
 namespace ivis {
+
+namespace {
+
+RuntimeConfig g_runtime_config = loadRuntimeConfig();
+std::string g_ble_encryption_key;
+
+}  // namespace
 
 // ─── Constructor / Destructor ─────────────────────────────────────────────────
 
@@ -47,16 +55,28 @@ IVISEngine::~IVISEngine() {
 
 HardwareStatus IVISEngine::init() {
     HardwareStatus status;
+    const auto runtime = loadRuntimeConfig();
+    g_runtime_config = runtime;
 
 #ifdef IVIS_REAL_HARDWARE
-    // ── 1. CAN Bus (SocketCAN on can0) ───────────────────────────────────────
-    std::cout << "[IVISEngine] Initializing SocketCAN (can0)...\n";
-    if (system("ip link set can0 type can bitrate 500000") != 0) {
-        status.error_msg = "Failed to set CAN bitrate on can0";
+    const auto runtimeBlockers = validateRuntimeConfig(runtime, true);
+    if (!runtimeBlockers.empty()) {
+        status.error_msg = runtimeBlockers.front();
         return status;
     }
-    if (system("ip link set can0 up") != 0) {
-        status.error_msg = "Failed to bring up can0";
+    g_ble_encryption_key = readTrimmedFile(runtime.ble_key_file);
+    if (g_ble_encryption_key.empty()) {
+        status.error_msg = "Failed to read IVIS_BLE_KEY_FILE";
+        return status;
+    }
+    // ── 1. CAN Bus (SocketCAN on can0) ───────────────────────────────────────
+    std::cout << "[IVISEngine] Initializing SocketCAN (" << runtime.can_interface << ")...\n";
+    if (system(("ip link set " + runtime.can_interface + " type can bitrate 500000").c_str()) != 0) {
+        status.error_msg = "Failed to set CAN bitrate on " + runtime.can_interface;
+        return status;
+    }
+    if (system(("ip link set " + runtime.can_interface + " up").c_str()) != 0) {
+        status.error_msg = "Failed to bring up " + runtime.can_interface;
         return status;
     }
 
@@ -67,10 +87,10 @@ HardwareStatus IVISEngine::init() {
     }
 
     struct ifreq ifr{};
-    std::strncpy(ifr.ifr_name, "can0", IFNAMSIZ - 1);
+    std::strncpy(ifr.ifr_name, runtime.can_interface.c_str(), IFNAMSIZ - 1);
     if (ioctl(socket_can_fd_, SIOCGIFINDEX, &ifr) < 0) {
         close(socket_can_fd_);
-        status.error_msg = "ioctl SIOCGIFINDEX failed for can0";
+        status.error_msg = "ioctl SIOCGIFINDEX failed for " + runtime.can_interface;
         return status;
     }
 
@@ -80,22 +100,22 @@ HardwareStatus IVISEngine::init() {
     if (bind(socket_can_fd_, reinterpret_cast<struct sockaddr*>(&addr),
              sizeof(addr)) < 0) {
         close(socket_can_fd_);
-        status.error_msg = "Failed to bind CAN socket to can0";
+        status.error_msg = "Failed to bind CAN socket to " + runtime.can_interface;
         return status;
     }
-    std::cout << "[IVISEngine] CAN socket bound to can0\n";
+    std::cout << "[IVISEngine] CAN socket bound to " << runtime.can_interface << "\n";
 
     // ── 2. RKNN NPU – load CV models ────────────────────────────────────────
     std::cout << "[IVISEngine] Loading RKNN models to NPU...\n";
-    if (rknn_init(&ctx_yolo_, "yolo_emergency.rknn", 0, 0, nullptr) < 0) {
+    if (rknn_init(&ctx_yolo_, runtime.yolo_model_path.c_str(), 0, 0, nullptr) < 0) {
         close(socket_can_fd_);
-        status.error_msg = "Failed to load yolo_emergency.rknn";
+        status.error_msg = "Failed to load " + runtime.yolo_model_path;
         return status;
     }
-    if (rknn_init(&ctx_lane_, "lanenet.rknn", 0, 0, nullptr) < 0) {
+    if (rknn_init(&ctx_lane_, runtime.lane_model_path.c_str(), 0, 0, nullptr) < 0) {
         close(socket_can_fd_);
         rknn_destroy(ctx_yolo_);
-        status.error_msg = "Failed to load lanenet.rknn";
+        status.error_msg = "Failed to load " + runtime.lane_model_path;
         return status;
     }
 
@@ -140,7 +160,7 @@ HardwareStatus IVISEngine::init() {
         return status;
     }
 
-    if (ble_start_advertising(ble_handle_, "IVIS-Edge") < 0) {
+    if (ble_start_advertising(ble_handle_, runtime.ble_device_name.c_str()) < 0) {
         close(socket_can_fd_);
         rknn_destroy(ctx_yolo_);
         rknn_destroy(ctx_lane_);
@@ -148,18 +168,18 @@ HardwareStatus IVISEngine::init() {
         status.error_msg = "Failed to start BLE advertising";
         return status;
     }
-    std::cout << "[IVISEngine] BLE advertising as IVIS-Edge\n";
+    std::cout << "[IVISEngine] BLE advertising as " << runtime.ble_device_name << "\n";
 
     // ── 4. Camera (V4L2) – 640×480 @ 30 fps ─────────────────────────────────
-    std::cout << "[IVISEngine] Opening V4L2 camera /dev/video0...\n";
-    camera_fd_ = open("/dev/video0", O_RDWR);
+    std::cout << "[IVISEngine] Opening V4L2 camera " << runtime.camera_device << "...\n";
+    camera_fd_ = open(runtime.camera_device.c_str(), O_RDWR);
     if (camera_fd_ < 0) {
         close(socket_can_fd_);
         rknn_destroy(ctx_yolo_);
         rknn_destroy(ctx_lane_);
         ble_stop_advertising(ble_handle_);
         ble_peripheral_deinit(ble_handle_);
-        status.error_msg = "Failed to open /dev/video0";
+        status.error_msg = "Failed to open " + runtime.camera_device;
         return status;
     }
 
@@ -201,6 +221,9 @@ HardwareStatus IVISEngine::init() {
     std::cout << "[IVISEngine] init() – running in software simulation mode\n";
 #endif
 
+    std::cout << "[IVISEngine] Runtime config can=" << runtime.can_interface
+              << " camera=" << runtime.camera_device
+              << " ble_name=" << runtime.ble_device_name << "\n";
     status.success = true;
     return status;
 }
@@ -211,7 +234,7 @@ void IVISEngine::shutdown() {
         close(socket_can_fd_);
         socket_can_fd_ = -1;
     }
-    system("ip link set can0 down");
+    system(("ip link set " + g_runtime_config.can_interface + " down").c_str());
     rknn_destroy(ctx_yolo_);
     rknn_destroy(ctx_lane_);
     if (ble_handle_ >= 0) {
@@ -294,14 +317,17 @@ EngineOutput IVISEngine::tick(
     // ── BLE characteristic update (encrypted) ─────────────────────────────
 #ifdef IVIS_REAL_HARDWARE
     if (ble_handle_ >= 0) {
-        auto enc = crypto::encryptStressLevel(current_stress_, "production_device_key_0x01");
-        // In this mock BLE API, we combine the IV + Ciphertext for the radio frame
-        std::vector<uint8_t> payload;
-        payload.insert(payload.end(), enc.iv, enc.iv + 12);
-        payload.insert(payload.end(), enc.ciphertext.begin(), enc.ciphertext.end());
-        payload.insert(payload.end(), enc.tag, enc.tag + 16);
-        
-        ble_update_characteristic(ble_handle_, 0x2A56, payload.data(), payload.size());
+        try {
+            auto enc = crypto::encryptStressLevel(current_stress_, g_ble_encryption_key);
+            std::vector<uint8_t> payload;
+            payload.insert(payload.end(), enc.iv.begin(), enc.iv.end());
+            payload.insert(payload.end(), enc.ciphertext.begin(), enc.ciphertext.end());
+            payload.insert(payload.end(), enc.tag.begin(), enc.tag.end());
+
+            ble_update_characteristic(ble_handle_, 0x2A56, payload.data(), payload.size());
+        } catch (const std::exception& ex) {
+            std::cerr << "[IVISEngine] BLE payload encryption failed: " << ex.what() << "\n";
+        }
     }
 #endif
 

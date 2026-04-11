@@ -171,4 +171,13 @@ describe('Sanitized error output', () => {
     expect(res.body.database).toBeUndefined();
     expect(res.body.redis).toBeUndefined();
   });
+
+  it('startup health does not leak secret values', async () => {
+    const res = await request(app).get('/health/startup');
+    expect(res.statusCode).toBe(200);
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain('JWT_SECRET');
+    expect(body).not.toContain('DATABASE_URL');
+    expect(res.body.checks).toBeDefined();
+  });
 });

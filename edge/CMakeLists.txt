@@ -23,20 +23,33 @@ set(IVIS_SOURCES
   src/intervention_dispatcher.cpp
 )
 
+find_package(OpenSSL QUIET)
+
 # ─── Main shared library (loaded by mobile via JNI / BLE bridge) ──────────────
 add_library(ivis SHARED ${IVIS_SOURCES})
 
 target_include_directories(ivis PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+if(OpenSSL_FOUND)
+  target_link_libraries(ivis PRIVATE OpenSSL::Crypto)
+  target_compile_definitions(ivis PRIVATE IVIS_HAVE_OPENSSL=1)
+endif()
 
 # ─── Standalone test binary ───────────────────────────────────────────────────
 add_executable(ivis_test src/ivis_engine.cpp ${IVIS_SOURCES})
 target_include_directories(ivis_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(ivis_test PRIVATE IVIS_STANDALONE_TEST=1)
+if(OpenSSL_FOUND)
+  target_link_libraries(ivis_test PRIVATE OpenSSL::Crypto)
+  target_compile_definitions(ivis_test PRIVATE IVIS_HAVE_OPENSSL=1)
+endif()
+
+add_executable(ivis_selftest src/ivis_selftest.cpp)
+target_include_directories(ivis_selftest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # ─── Install rules ────────────────────────────────────────────────────────────
-install(TARGETS ivis
+install(TARGETS ivis ivis_selftest
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )

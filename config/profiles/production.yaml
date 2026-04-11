@@ -1,0 +1,18 @@
+app:
+  profile: production
+  log_level: INFO
+
+llm:
+  provider: gemini
+
+slm:
+  provider: phi3
+
+perception:
+  backend: yolo
+
+voice:
+  provider: sarvam
+
+navigation:
+  provider: googlemaps

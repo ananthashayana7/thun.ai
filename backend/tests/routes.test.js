@@ -144,6 +144,10 @@ describe('Protected routes require auth', () => {
     { method: 'post', path: '/feedback/therapist' },
     { method: 'get', path: '/feedback/trajectory' },
     { method: 'post', path: '/route/accident-zones' },
+    { method: 'get', path: '/privacy/consent' },
+    { method: 'put', path: '/privacy/consent' },
+    { method: 'post', path: '/privacy/export' },
+    { method: 'post', path: '/privacy/delete-account' },
   ];
 
   routes.forEach(({ method, path }) => {
@@ -367,5 +371,91 @@ describe('GET /feedback/trajectory', () => {
       .set('Authorization', AUTH_HEADER);
     expect(res.statusCode).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
+  });
+});
+
+describe('Privacy routes', () => {
+  it('returns consent state and request history', async () => {
+    query
+      .mockResolvedValueOnce({
+        rows: [{
+          consent_version: '2026-04-11',
+          telemetry_upload: true,
+          biometrics_processing: true,
+          therapist_transcript_retention: false,
+          marketing_updates: false,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const res = await request(app)
+      .get('/privacy/consent')
+      .set('Authorization', AUTH_HEADER);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.consent.consent_version).toBe('2026-04-11');
+    expect(Array.isArray(res.body.requests)).toBe(true);
+  });
+
+  it('updates privacy consent', async () => {
+    query.mockResolvedValue({
+      rows: [{
+        consent_version: '2026-04-11',
+        telemetry_upload: true,
+        biometrics_processing: true,
+        therapist_transcript_retention: false,
+        marketing_updates: false,
+      }],
+    });
+
+    const res = await request(app)
+      .put('/privacy/consent')
+      .set('Authorization', AUTH_HEADER)
+      .send({
+        consentVersion: '2026-04-11',
+        telemetryUpload: true,
+        biometricsProcessing: true,
+        therapistTranscriptRetention: false,
+        marketingUpdates: false,
+      });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.consent.telemetry_upload).toBe(true);
+  });
+
+  it('queues an export request', async () => {
+    query.mockResolvedValue({
+      rows: [{
+        id: '44444444-4444-4444-8444-444444444444',
+        request_type: 'export',
+        status: 'queued',
+      }],
+    });
+
+    const res = await request(app)
+      .post('/privacy/export')
+      .set('Authorization', AUTH_HEADER)
+      .send({ format: 'json' });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.body.request_type).toBe('export');
+  });
+
+  it('queues a deletion request only when confirm is true', async () => {
+    query.mockResolvedValue({
+      rows: [{
+        id: '55555555-5555-4555-8555-555555555555',
+        request_type: 'delete',
+        status: 'queued',
+      }],
+    });
+
+    const res = await request(app)
+      .post('/privacy/delete-account')
+      .set('Authorization', AUTH_HEADER)
+      .send({ confirm: true, reason: 'User requested deletion' });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.body.request_type).toBe('delete');
   });
 });

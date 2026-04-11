@@ -19,15 +19,25 @@ import sys
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
+    from thunai.config import validate_runtime_config
     from thunai.engine import ThunaiEngine
 
     engine = ThunaiEngine.from_config()
     info = engine.get_provider_info()
     readiness = engine.get_readiness_report()
+    config_validation = validate_runtime_config(engine._config)  # noqa: SLF001 - CLI diagnostics
     print("thun.ai provider status")
     print("─" * 40)
     for key, value in info.items():
         print(f"  {key:<12} {value}")
+    print("\nDeployment profile")
+    print("-" * 40)
+    print(f"  profile        {config_validation['profile']}")
+    print(f"  config_status  {config_validation['status']}")
+    if config_validation["blockers"]:
+        print("  blockers       " + "; ".join(config_validation["blockers"]))
+    if config_validation["warnings"]:
+        print("  warnings       " + "; ".join(config_validation["warnings"]))
     print("\nHardware readiness")
     print("─" * 40)
     print(f"  status         {readiness.status}")

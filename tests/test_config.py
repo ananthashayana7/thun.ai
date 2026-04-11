@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from thunai.config import ThunaiConfig, load_config
+from thunai.config import ThunaiConfig, load_config, validate_runtime_config
 
 
 def test_load_config_returns_thunai_config():
@@ -32,6 +32,7 @@ def test_default_llm_provider():
 def test_default_app_config():
     config = load_config()
     assert config.app.name == "thun.ai"
+    assert config.app.profile == "development"
     assert config.app.speed_silence_threshold_kmh == 80.0
 
 
@@ -85,3 +86,24 @@ def test_hardware_defaults():
     config = load_config()
     assert config.hardware.disconnect_timeout_seconds == 2.0
     assert config.hardware.latency_budget_ms == 50.0
+
+
+def test_profile_overlay_loads_pilot_config(tmp_path):
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    (tmp_path / "default.yaml").write_text("app:\n  profile: development\n")
+    (profiles_dir / "pilot.yaml").write_text("app:\n  profile: pilot\nslm:\n  provider: phi3\n")
+
+    config = load_config(config_dir=tmp_path, profile="pilot")
+    assert config.app.profile == "pilot"
+    assert config.slm.provider == "phi3"
+
+
+def test_validate_runtime_config_flags_stub_provider_outside_development(monkeypatch):
+    monkeypatch.setenv("THUNAI_PROFILE", "production")
+    config = load_config()
+    validation = validate_runtime_config(config)
+
+    assert validation["profile"] == "production"
+    assert validation["status"] == "blocked"
+    assert any("Perception backend cannot be stub" in blocker for blocker in validation["blockers"])

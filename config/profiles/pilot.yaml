@@ -1,0 +1,15 @@
+app:
+  profile: pilot
+  log_level: INFO
+
+slm:
+  provider: phi3
+
+perception:
+  backend: yolo
+
+voice:
+  provider: system
+
+navigation:
+  provider: googlemaps

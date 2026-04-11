@@ -202,10 +202,63 @@ const driveUpdateSchema = [
   handleValidationErrors,
 ];
 
+const privacyConsentSchema = [
+  body('consentVersion')
+    .optional()
+    .isString()
+    .isLength({ min: 1, max: 40 })
+    .withMessage('consentVersion must be 1-40 chars'),
+
+  body('telemetryUpload')
+    .isBoolean()
+    .withMessage('telemetryUpload must be boolean'),
+
+  body('biometricsProcessing')
+    .isBoolean()
+    .withMessage('biometricsProcessing must be boolean'),
+
+  body('therapistTranscriptRetention')
+    .isBoolean()
+    .withMessage('therapistTranscriptRetention must be boolean'),
+
+  body('marketingUpdates')
+    .optional()
+    .isBoolean()
+    .withMessage('marketingUpdates must be boolean'),
+
+  handleValidationErrors,
+];
+
+const privacyExportRequestSchema = [
+  body('format')
+    .optional()
+    .isIn(['json'])
+    .withMessage('format must be json'),
+
+  handleValidationErrors,
+];
+
+const privacyDeletionRequestSchema = [
+  body('confirm')
+    .custom((value) => value === true)
+    .withMessage('confirm must be true'),
+
+  body('reason')
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage('reason max 500 chars'),
+
+  handleValidationErrors,
+];
+
 module.exports = {
   handleValidationErrors,
   feedbackGenerateSchema,
   therapistChatSchema,
   driveCreateSchema,
   driveUpdateSchema,
+  privacyConsentSchema,
+  privacyExportRequestSchema,
+  privacyDeletionRequestSchema,
 };

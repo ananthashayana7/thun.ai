@@ -1,0 +1,319 @@
+openapi: 3.0.3
+info:
+  title: thun.ai Backend API
+  version: 1.0.0
+  description: Machine-readable contract for the mobile, backend, privacy, and feedback flows.
+servers:
+  - url: https://api.thun.ai
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        request_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        ts:
+          type: string
+          format: date-time
+    AuthVerifyRequest:
+      type: object
+      required: [idToken]
+      properties:
+        idToken:
+          type: string
+    AuthVerifyResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            email:
+              type: string
+    DriveCreateRequest:
+      type: object
+      properties:
+        startedAt:
+          type: string
+          format: date-time
+        routeMeta:
+          type: object
+          additionalProperties: true
+    DriveUpdateRequest:
+      type: object
+      properties:
+        endedAt:
+          type: string
+          format: date-time
+        anxietyScoreAvg:
+          type: number
+        peakStress:
+          type: number
+        stressEvents:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        telemetrySummary:
+          type: object
+          additionalProperties: true
+        routeMeta:
+          type: object
+          additionalProperties: true
+    FeedbackGenerateRequest:
+      type: object
+      required: [sessionId, anxietyScoreAvg, peakStress]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        anxietyScoreAvg:
+          type: number
+        peakStress:
+          type: number
+        stressEvents:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        routeMeta:
+          type: object
+          additionalProperties: true
+        telemetrySummary:
+          type: object
+          additionalProperties: true
+        driverProfile:
+          type: object
+          additionalProperties: true
+    TherapistRequest:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content:
+                type: string
+        systemContext:
+          type: string
+    PrivacyConsentRequest:
+      type: object
+      required: [telemetryUpload, biometricsProcessing, therapistTranscriptRetention]
+      properties:
+        consentVersion:
+          type: string
+        telemetryUpload:
+          type: boolean
+        biometricsProcessing:
+          type: boolean
+        therapistTranscriptRetention:
+          type: boolean
+        marketingUpdates:
+          type: boolean
+paths:
+  /health:
+    get:
+      summary: Shallow health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /health/providers:
+    get:
+      summary: Provider health and circuit breaker state
+      responses:
+        '200':
+          description: Provider status
+  /health/startup:
+    get:
+      summary: Startup validation status
+      responses:
+        '200':
+          description: Startup validation summary
+  /auth/verify:
+    post:
+      summary: Exchange Firebase token for backend session token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthVerifyRequest'
+      responses:
+        '200':
+          description: Authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthVerifyResponse'
+  /drive:
+    post:
+      security:
+        - bearerAuth: []
+      summary: Create a drive session
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DriveCreateRequest'
+      responses:
+        '201':
+          description: Drive created
+    get:
+      security:
+        - bearerAuth: []
+      summary: List drive sessions
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Drive list
+  /drive/{id}:
+    get:
+      security:
+        - bearerAuth: []
+      summary: Get a drive session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Drive session
+    put:
+      security:
+        - bearerAuth: []
+      summary: Update a drive session
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DriveUpdateRequest'
+      responses:
+        '200':
+          description: Drive updated
+  /feedback/generate:
+    post:
+      security:
+        - bearerAuth: []
+      summary: Generate post-drive narrative and scenarios
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackGenerateRequest'
+      responses:
+        '200':
+          description: Feedback payload
+  /feedback/therapist:
+    post:
+      security:
+        - bearerAuth: []
+      summary: Therapist chat response
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TherapistRequest'
+      responses:
+        '200':
+          description: Therapist response
+  /feedback/trajectory:
+    get:
+      security:
+        - bearerAuth: []
+      summary: Confidence trajectory history
+      responses:
+        '200':
+          description: Confidence trajectory points
+  /route/accident-zones:
+    post:
+      security:
+        - bearerAuth: []
+      summary: Score a route against stored accident zones
+      responses:
+        '200':
+          description: Accident zone score
+  /privacy/consent:
+    get:
+      security:
+        - bearerAuth: []
+      summary: Get current consent state and recent privacy requests
+      responses:
+        '200':
+          description: Privacy consent state
+    put:
+      security:
+        - bearerAuth: []
+      summary: Update privacy consent state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrivacyConsentRequest'
+      responses:
+        '200':
+          description: Updated consent
+  /privacy/export:
+    post:
+      security:
+        - bearerAuth: []
+      summary: Queue a data export request
+      responses:
+        '202':
+          description: Export request queued
+  /privacy/delete-account:
+    post:
+      security:
+        - bearerAuth: []
+      summary: Queue an account deletion request
+      responses:
+        '202':
+          description: Deletion request queued

@@ -32,6 +32,8 @@ class WatchService {
     this._isConnected = false;
     this._isReconnecting = false;
     this._manualDisconnect = false;
+    this._lastError = null;
+    this._lastHeartbeatAt = null;
   }
 
   async scan(timeoutMs = 10000) {
@@ -65,11 +67,13 @@ class WatchService {
       this._reconnectAttempts = 0;
       this._isConnected = true;
       this._isReconnecting = false;
+      this._lastError = null;
       this._emitConnectionState('connected');
       return true;
     } catch (err) {
       console.error('[WatchService] connect error:', err);
       this._isConnected = false;
+      this._lastError = err?.message || 'Unknown connect error';
       this._emitConnectionState('disconnected', err);
       return false;
     }
@@ -108,6 +112,7 @@ class WatchService {
         const hrv = this._computeRMSSD(this._rrIntervals.slice(-HRV_WINDOW_SIZE));
         this._currentHR = data.heartRate;
         this._currentHRV = hrv;
+        this._lastHeartbeatAt = Date.now();
 
         const biometrics = {
           hr: data.heartRate,
@@ -145,6 +150,18 @@ class WatchService {
     this._emitConnectionState('disconnected');
   }
 
+  async ensureConnection() {
+    if (this._isConnected || this._isReconnecting || !this._deviceId) {
+      return this._isConnected;
+    }
+
+    const connected = await this.connect(this._deviceId);
+    if (connected) {
+      this.startStreaming();
+    }
+    return connected;
+  }
+
   _scheduleReconnect(error) {
     if (this._manualDisconnect || this._isReconnecting || !this._deviceId) {
       return;
@@ -176,11 +193,13 @@ class WatchService {
   }
 
   _emitConnectionState(state, error = null, meta = {}) {
+    this._lastError = error ? error.message : this._lastError;
     const payload = {
       state,
       connected: state === 'connected',
       reconnectAttempts: this._reconnectAttempts,
       error: error ? error.message : null,
+      lastHeartbeatAt: this._lastHeartbeatAt,
       ...meta,
     };
     this._connectionListeners.forEach((cb) => cb(payload));
@@ -248,6 +267,8 @@ class WatchService {
       reconnecting: this._isReconnecting,
       reconnectAttempts: this._reconnectAttempts,
       deviceId: this._deviceId,
+      lastError: this._lastError,
+      lastHeartbeatAt: this._lastHeartbeatAt,
     };
   }
 }

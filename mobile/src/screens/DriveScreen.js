@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
-  Animated, Alert, StatusBar,
+  Animated, Alert, AppState, StatusBar,
 } from 'react-native';
 import { nanoid } from 'nanoid/non-secure';
 import OBDService from '../services/OBDService';
@@ -15,6 +15,7 @@ import WatchService from '../services/WatchService';
 import IVISEngine from '../services/IVISEngine';
 import ConfidenceCorridorService from '../services/ConfidenceCorridorService';
 import LocalStorage from '../services/LocalStorage';
+import SyncService from '../services/SyncService';
 import { useAnxietyProfileStore } from '../store/anxietyProfile';
 import { COLORS, INTERVENTION } from '../utils/constants';
 
@@ -35,6 +36,7 @@ export default function DriveScreen({ navigation, route: navRoute }) {
   const [corridorState, setCorridorState] = useState(() => ConfidenceCorridorService.getCurrentState());
   const [obdConnection, setObdConnection] = useState(() => OBDService.getConnectionState());
   const [watchConnection, setWatchConnection] = useState(() => WatchService.getConnectionState());
+  const [syncStatus, setSyncStatus] = useState(() => SyncService.getConnectionStatus());
 
   const tickRef = useRef(null);
   const timerRef = useRef(null);
@@ -85,6 +87,18 @@ export default function DriveScreen({ navigation, route: navRoute }) {
       setWatchConnection(state);
     });
 
+    const offSyncHealth = SyncService.subscribeHealth((state) => {
+      setSyncStatus(state);
+    });
+
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        OBDService.ensureConnection().catch(() => {});
+        WatchService.ensureConnection().catch(() => {});
+        SyncService.recoverNow().catch(() => {});
+      }
+    });
+
     // Tick loop
     tickRef.current = setInterval(async () => {
       const obd = OBDService.getLastData();
@@ -118,6 +132,8 @@ export default function DriveScreen({ navigation, route: navRoute }) {
       offBreath();
       offObdConnection();
       offWatchConnection();
+      offSyncHealth();
+      appStateSubscription.remove();
       WatchService.stopStreaming();
       ConfidenceCorridorService.stopSession();
     };
@@ -171,6 +187,26 @@ export default function DriveScreen({ navigation, route: navRoute }) {
     : corridorState?.status === 'caution'
       ? COLORS.warning
       : COLORS.accent;
+  const systemWarnings = [];
+  if (obdConnection?.state === 'reconnecting') {
+    systemWarnings.push('Reconnecting OBD adapter');
+  } else if (obdConnection?.connected === false) {
+    systemWarnings.push('OBD adapter offline - vehicle telemetry degraded');
+  }
+
+  if (watchConnection?.state === 'reconnecting') {
+    systemWarnings.push('Reconnecting heart-rate sensor');
+  } else if (watchConnection?.connected === false) {
+    systemWarnings.push('Heart-rate sensor offline - biometrics degraded');
+  }
+
+  if (!syncStatus.connected) {
+    systemWarnings.push(
+      syncStatus.queuedRequestCount > 0
+        ? `${syncStatus.queuedRequestCount} sync item(s) queued for replay`
+        : 'Backend offline - syncing paused'
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -233,11 +269,9 @@ export default function DriveScreen({ navigation, route: navRoute }) {
       </View>
 
       {/* OBD telemetry */}
-      {(obdConnection?.state === 'reconnecting' || watchConnection?.state === 'reconnecting') && (
+      {systemWarnings.length > 0 && (
         <View style={styles.sensorBanner}>
-          <Text style={styles.sensorBannerText}>
-            {obdConnection?.state === 'reconnecting' ? 'Reconnecting OBD adapter' : 'Reconnecting heart-rate sensor'}
-          </Text>
+          <Text style={styles.sensorBannerText}>{systemWarnings.join(' | ')}</Text>
         </View>
       )}
 

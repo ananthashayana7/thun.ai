@@ -20,6 +20,7 @@ import { useAnxietyProfileStore } from '../store/anxietyProfile';
 import RouteScoring from '../services/RouteScoring';
 import SyncService from '../services/SyncService';
 import TTSService from '../services/TTSService';
+import ErrorTracker from '../services/ErrorTracker';
 import { COLORS, API } from '../utils/constants';
 
 const Stack = createNativeStackNavigator();
@@ -50,6 +51,11 @@ export default function AppNavigator() {
     // Load persisted profile on startup
     loadProfile();
 
+    ErrorTracker.init({
+      environment: __DEV__ ? 'development' : 'production',
+      release: 'mobile@1.0.0',
+    });
+
     SyncService.init().catch((error) => {
       console.warn('[AppNavigator] Sync service init failed:', error?.message || error);
     });
@@ -64,7 +70,15 @@ export default function AppNavigator() {
   useEffect(() => {
     const lang = profile?.ttsLanguage || 'en-IN';
     TTSService.init(null, lang); // Sarvam key injected separately if available
-  }, [profile?.ttsLanguage]);
+    ErrorTracker.setUser(
+      profile?.userId
+        ? {
+            id: profile.userId,
+            email: profile.email,
+          }
+        : null
+    );
+  }, [profile?.email, profile?.ttsLanguage, profile?.userId]);
 
   return (
     <NavigationContainer>

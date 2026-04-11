@@ -3,6 +3,12 @@ jest.mock('@react-native-community/netinfo', () => ({
   addEventListener: jest.fn(() => jest.fn()),
 }));
 
+jest.mock('react-native', () => ({
+  AppState: {
+    addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+  },
+}));
+
 jest.mock('axios', () => ({
   __esModule: true,
   default: jest.fn(),
@@ -13,11 +19,17 @@ jest.mock('../src/services/LocalStorage', () => ({
   saveSyncRequest: jest.fn(),
   getPendingSyncRequests: jest.fn(),
   updateSyncRequestStatus: jest.fn(),
+  getSyncQueueStats: jest.fn(),
+}));
+
+jest.mock('../src/services/AuthSessionService', () => ({
+  buildAuthHeaders: jest.fn(async (headers = {}) => headers),
 }));
 
 import NetInfo from '@react-native-community/netinfo';
 import axios from 'axios';
 import LocalStorage from '../src/services/LocalStorage';
+import AuthSessionService from '../src/services/AuthSessionService';
 import SyncService from '../src/services/SyncService';
 
 describe('SyncService', () => {
@@ -34,6 +46,8 @@ describe('SyncService', () => {
     LocalStorage.saveSyncRequest.mockResolvedValue(null);
     LocalStorage.getPendingSyncRequests.mockResolvedValue([]);
     LocalStorage.updateSyncRequestStatus.mockResolvedValue(null);
+    LocalStorage.getSyncQueueStats.mockResolvedValue({ pending: 0, processing: 0, completed: 0 });
+    AuthSessionService.buildAuthHeaders.mockImplementation(async (headers = {}) => headers);
   });
 
   it('returns a cached completed response when dedupe is enabled', async () => {
@@ -100,5 +114,33 @@ describe('SyncService', () => {
       })
     );
     expect(listener).toHaveBeenCalledWith({ status: 'completed', data: { narrative: 'synced', scenarios: [] }, cached: false });
+  });
+
+  it('marks queued work as failed when the backend returns unauthorized', async () => {
+    LocalStorage.getPendingSyncRequests.mockResolvedValue([
+      {
+        request_key: 'feedback.generate.session-4',
+        method: 'POST',
+        url: 'https://api.thun.ai/feedback/generate',
+        body: { sessionId: 'session-4' },
+        headers: {},
+        attempt_count: 0,
+      },
+    ]);
+    axios.mockRejectedValue({
+      response: { status: 401, data: { error: 'unauthorized' } },
+      message: 'Request failed with status code 401',
+    });
+
+    await SyncService.flushPending();
+
+    expect(LocalStorage.updateSyncRequestStatus).toHaveBeenCalledWith(
+      'feedback.generate.session-4',
+      'failed',
+      expect.objectContaining({
+        attemptCount: 1,
+        lastError: expect.stringContaining('Authentication required'),
+      })
+    );
   });
 });

@@ -4,11 +4,13 @@
  */
 import { create } from 'zustand';
 import LocalStorage from '../services/LocalStorage';
-import { VEHICLE_DEFAULTS } from '../utils/constants';
+import { PRIVACY, VEHICLE_DEFAULTS } from '../utils/constants';
 
 const DEFAULT_PROFILE = {
   onboardingComplete: false,
   userId: null,
+  email: '',
+  authToken: null,
   name: '',
   anxietySensitivityScore: 35,
   // Anxiety questionnaire responses (GAD-7 inspired, driving-specific)
@@ -54,6 +56,10 @@ const DEFAULT_PROFILE = {
     avgBaselineStress: null,
     lastCalibrated: null,
   },
+  privacy: {
+    version: PRIVACY.CONSENT_VERSION,
+    ...PRIVACY.DEFAULTS,
+  },
 };
 
 export const useAnxietyProfileStore = create((set, get) => ({
@@ -63,8 +69,17 @@ export const useAnxietyProfileStore = create((set, get) => ({
   loadProfile: async () => {
     try {
       const stored = await LocalStorage.getProfile();
+      const privacy = await LocalStorage.getPrivacySettings?.();
       if (stored) {
-        set({ profile: { ...DEFAULT_PROFILE, ...stored } });
+        set({
+          profile: {
+            ...DEFAULT_PROFILE,
+            ...stored,
+            privacy: { ...DEFAULT_PROFILE.privacy, ...(privacy || stored.privacy || {}) },
+          },
+        });
+      } else if (privacy) {
+        set({ profile: { ...DEFAULT_PROFILE, privacy: { ...DEFAULT_PROFILE.privacy, ...privacy } } });
       }
     } catch (err) {
       console.error('[AnxietyStore] loadProfile error:', err);
@@ -77,6 +92,9 @@ export const useAnxietyProfileStore = create((set, get) => ({
     set({ profile: next });
     try {
       await LocalStorage.saveProfile(next);
+      if (updates.privacy) {
+        await LocalStorage.savePrivacySettings(updates.privacy);
+      }
     } catch (err) {
       console.error('[AnxietyStore] updateProfile error:', err);
     }
@@ -104,6 +122,7 @@ export const useAnxietyProfileStore = create((set, get) => ({
   /** Reset to defaults (used during re-onboarding) */
   resetProfile: async () => {
     set({ profile: DEFAULT_PROFILE });
+    await LocalStorage.clearAllData();
     await LocalStorage.saveProfile(DEFAULT_PROFILE);
   },
 }));

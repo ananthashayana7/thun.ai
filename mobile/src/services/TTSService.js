@@ -158,6 +158,19 @@ class TTSService {
     this._isSpeaking = false;
   }
 
+  getRuntimeStatus() {
+    return {
+      activeProvider: this._sarvamKey ? 'sarvam' : 'native-system',
+      sarvamConfigured: Boolean(this._sarvamKey),
+      elevenLabsAvailable: false,
+      language: this._language,
+      speedGateKmh: SPEED_GATE_KMH,
+      silenced: this._currentSpeed > SPEED_GATE_KMH,
+      queueDepth: this._queue.length,
+      speaking: this._isSpeaking,
+    };
+  }
+
   stopAll() {
     this._queue = [];
     this._stop();

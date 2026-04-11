@@ -1,7 +1,9 @@
+import { AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import axios from 'axios';
 import LocalStorage from './LocalStorage';
 import ErrorTracker from './ErrorTracker';
+import AuthSessionService from './AuthSessionService';
 import { API } from '../utils/constants';
 
 // For production, always use TLS pinning to prevent MITM attacks.
@@ -17,6 +19,20 @@ function isConnectedState(state) {
 
 function isOfflineError(error) {
   return error?.code === 'ERR_NETWORK' || /network error/i.test(error?.message || '');
+}
+
+function isRetryableError(error) {
+  if (isOfflineError(error)) {
+    return true;
+  }
+
+  const status = error?.response?.status;
+  return [408, 425, 429, 500, 502, 503, 504].includes(status);
+}
+
+function isAuthError(error) {
+  const status = error?.response?.status;
+  return status === 401 || status === 403;
 }
 
 function toBackoffDelay(attemptCount) {
@@ -35,7 +51,12 @@ class SyncService {
     this._isConnected = true;
     this._isFlushing = false;
     this._listeners = new Map();
+    this._healthListeners = new Set();
     this._unsubscribeNetInfo = null;
+    this._appStateSubscription = null;
+    this._queueStats = { pending: 0, processing: 0, completed: 0 };
+    this._lastFlushAt = null;
+    this._lastError = null;
   }
 
   async init() {
@@ -47,6 +68,7 @@ class SyncService {
     this._unsubscribeNetInfo = NetInfo.addEventListener((nextState) => {
       const wasConnected = this._isConnected;
       this._isConnected = isConnectedState(nextState);
+      this._emitHealth();
 
       if (!wasConnected && this._isConnected) {
         this.flushPending().catch((error) => {
@@ -54,6 +76,17 @@ class SyncService {
         });
       }
     });
+
+    this._appStateSubscription = AppState.addEventListener?.('change', (nextState) => {
+      if (nextState === 'active') {
+        this.flushPending().catch((error) => {
+          console.warn('[SyncService] foreground flush failed:', error?.message || error);
+        });
+      }
+    });
+
+    await this._refreshQueueStats();
+    this._emitHealth();
 
     this._isInitialized = true;
   }
@@ -73,6 +106,15 @@ class SyncService {
       if (listeners.size === 0) {
         this._listeners.delete(requestKey);
       }
+    };
+  }
+
+  subscribeHealth(listener) {
+    this._healthListeners.add(listener);
+    listener(this.getConnectionStatus());
+
+    return () => {
+      this._healthListeners.delete(listener);
     };
   }
 
@@ -97,6 +139,8 @@ class SyncService {
       transformResponse = (response) => response.data,
     } = options;
 
+    const requestHeaders = await AuthSessionService.buildAuthHeaders(headers);
+
     if (requestKey && dedupeCompleted) {
       const cached = await this.getCachedResult(requestKey);
       if (cached) {
@@ -105,11 +149,11 @@ class SyncService {
     }
 
     if (!this._isConnected && queueIfOffline) {
-      return this._queueRequest({ requestKey, method, url, body, headers }, 'Offline - queued for retry');
+      return this._queueRequest({ requestKey, method, url, body, headers: requestHeaders }, 'Offline - queued for retry');
     }
 
     try {
-      const response = await axios({ method, url, data: body, headers, timeout });
+      const response = await axios({ method, url, data: body, headers: requestHeaders, timeout });
       const data = transformResponse(response);
 
       if (requestKey && cacheOnSuccess) {
@@ -118,7 +162,7 @@ class SyncService {
           method,
           url,
           body,
-          headers,
+          headers: requestHeaders,
           status: 'completed',
           responseData: data,
           attemptCount: 0,
@@ -127,14 +171,26 @@ class SyncService {
         });
       }
 
+      this._lastError = null;
+      await this._refreshQueueStats();
       this._emit(requestKey, { status: 'completed', data, cached: false });
+      this._emitHealth();
       return { status: 'success', data, cached: false };
     } catch (error) {
-      if (requestKey && queueIfOffline && isOfflineError(error)) {
-        return this._queueRequest({ requestKey, method, url, body, headers }, serializeError(error));
+      if (requestKey && queueIfOffline && isRetryableError(error)) {
+        return this._queueRequest({ requestKey, method, url, body, headers: requestHeaders }, serializeError(error));
       }
 
+      this._lastError = isAuthError(error)
+        ? 'Authentication required. Provision a backend token before syncing protected APIs.'
+        : serializeError(error);
+      ErrorTracker.captureError(error, {
+        requestKey,
+        url,
+        service: 'sync.request',
+      });
       this._emit(requestKey, { status: 'failed', error });
+      this._emitHealth();
       throw error;
     }
   }
@@ -144,9 +200,11 @@ class SyncService {
     if (!this._isConnected || this._isFlushing) return;
 
     this._isFlushing = true;
+    this._emitHealth();
 
     try {
       const pendingRequests = await LocalStorage.getPendingSyncRequests();
+      this._queueStats.pending = pendingRequests.length;
 
       for (const request of pendingRequests) {
         if (!this._isConnected) break;
@@ -157,11 +215,12 @@ class SyncService {
         });
 
         try {
+          const requestHeaders = await AuthSessionService.buildAuthHeaders(request.headers || {});
           const response = await axios({
             method: request.method,
             url: request.url,
             data: request.body,
-            headers: request.headers,
+            headers: requestHeaders,
             timeout: API.TIMEOUT_MS,
           });
 
@@ -172,6 +231,8 @@ class SyncService {
             nextAttemptAt: new Date().toISOString(),
           });
 
+          this._lastError = null;
+          this._lastFlushAt = new Date().toISOString();
           this._emit(request.request_key, { status: 'completed', data: response.data, cached: false });
         } catch (error) {
           if (isOfflineError(error)) {
@@ -179,13 +240,36 @@ class SyncService {
           }
 
           const attemptCount = request.attempt_count + 1;
-          await LocalStorage.updateSyncRequestStatus(request.request_key, 'pending', {
-            attemptCount,
-            lastError: serializeError(error),
-            nextAttemptAt: new Date(Date.now() + toBackoffDelay(attemptCount)).toISOString(),
-          });
+          const retryable = isRetryableError(error);
+          const errorMessage = isAuthError(error)
+            ? 'Authentication required. Provision a backend token before syncing protected APIs.'
+            : serializeError(error);
 
-          this._emit(request.request_key, { status: 'queued', error, attemptCount });
+          await LocalStorage.updateSyncRequestStatus(
+            request.request_key,
+            retryable ? 'pending' : 'failed',
+            {
+              attemptCount,
+              lastError: errorMessage,
+              nextAttemptAt: retryable
+                ? new Date(Date.now() + toBackoffDelay(attemptCount)).toISOString()
+                : new Date().toISOString(),
+            }
+          );
+
+          this._lastError = errorMessage;
+          ErrorTracker.captureError(error, {
+            requestKey: request.request_key,
+            url: request.url,
+            service: 'sync.flushPending',
+            attemptCount,
+          });
+          this._emit(
+            request.request_key,
+            retryable
+              ? { status: 'queued', error, attemptCount }
+              : { status: 'failed', error, attemptCount }
+          );
 
           if (!this._isConnected) {
             break;
@@ -193,7 +277,9 @@ class SyncService {
         }
       }
     } finally {
+      await this._refreshQueueStats();
       this._isFlushing = false;
+      this._emitHealth();
     }
   }
 
@@ -211,7 +297,10 @@ class SyncService {
       nextAttemptAt: new Date().toISOString(),
     });
 
+    this._lastError = lastError;
+    await this._refreshQueueStats();
     this._emit(requestKey, { status: 'queued', error: lastError });
+    this._emitHealth();
     return { status: 'queued' };
   }
 
@@ -222,6 +311,35 @@ class SyncService {
     if (!listeners) return;
 
     listeners.forEach((listener) => listener(event));
+  }
+
+  async _refreshQueueStats() {
+    if (typeof LocalStorage.getSyncQueueStats === 'function') {
+      this._queueStats = await LocalStorage.getSyncQueueStats();
+    }
+  }
+
+  _emitHealth() {
+    const snapshot = this.getConnectionStatus();
+    this._healthListeners.forEach((listener) => listener(snapshot));
+  }
+
+  async recoverNow() {
+    await this.init();
+    await this.flushPending();
+  }
+
+  getConnectionStatus() {
+    return {
+      initialized: this._isInitialized,
+      connected: this._isConnected,
+      flushing: this._isFlushing,
+      activeSubscriptions: this._listeners.size,
+      queueStats: this._queueStats,
+      queuedRequestCount: this._queueStats.pending + this._queueStats.processing,
+      lastFlushAt: this._lastFlushAt,
+      lastError: this._lastError,
+    };
   }
 }
 

@@ -40,6 +40,7 @@ def test_stack_manifest_contains_deployment_and_providers(monkeypatch):
     assert manifest["deployment"]["local_retention_days"] == 90
     assert manifest["providers"]["llm"] == "stub/stub-llm"
     assert manifest["synthetic_data"]["target"] == "slm_finetune"
+    assert manifest["config_validation"]["profile"] == "development"
 
 
 def test_export_synthetic_dataset_writes_json(tmp_path, monkeypatch):

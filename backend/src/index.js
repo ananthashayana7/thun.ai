@@ -15,15 +15,17 @@ const requestIdMiddleware = require('./middleware/requestId');
 const { auditContextMiddleware } = require('./middleware/audit');
 const { initRedis } = require('./db/redis');
 const { globalRateLimiter } = require('./middleware/rateLimiter');
+const { captureException, initErrorTracker } = require('./services/errorTracker');
+const { collectStartupStatus, assertStartupReady } = require('./config/startup');
 const authMiddleware = require('./middleware/auth');
 const authRoutes = require('./routes/auth');
 const driveRoutes = require('./routes/drive');
 const routeRoutes = require('./routes/route');
 const feedbackRoutes = require('./routes/feedback');
+const privacyRoutes = require('./routes/privacy');
 
 const PORT = process.env.PORT || 3000;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
-
 const app = express();
 
 // ─── Security headers ────────────────────────────────────────────────────────
@@ -75,6 +77,10 @@ app.get('/health/providers', (_req, res) => {
   });
 });
 
+app.get('/health/startup', (_req, res) => {
+  res.json(collectStartupStatus());
+});
+
 // ─── Public routes ────────────────────────────────────────────────────────────
 app.use('/auth', authRoutes);
 
@@ -82,6 +88,7 @@ app.use('/auth', authRoutes);
 app.use('/drive', authMiddleware, driveRoutes);
 app.use('/route', authMiddleware, routeRoutes);
 app.use('/feedback', authMiddleware, feedbackRoutes);
+app.use('/privacy', authMiddleware, privacyRoutes);
 
 // ─── 404 ──────────────────────────────────────────────────────────────────────
 app.use((_req, res) => {
@@ -92,6 +99,12 @@ app.use((_req, res) => {
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
   console.error(`[${req.id}] Error: ${err.message}`);
+  captureException(err, {
+    requestId: req.id,
+    userId: req.user?.userId,
+    path: req.path,
+    method: req.method,
+  });
   
   // Sanitize error response (don't leak secrets)
   let status = err.status || 500;
@@ -111,6 +124,10 @@ app.use((err, req, res, _next) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 async function start() {
   try {
+    const validatedStartupStatus = assertStartupReady();
+    initErrorTracker({ environment: validatedStartupStatus.environment });
+    console.log(`[Startup] readiness=${validatedStartupStatus.status}`);
+
     // Initialize Redis (with fallback to in-memory)
     await initRedis();
     console.log('[Redis] Initialized');
