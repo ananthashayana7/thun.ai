@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from thunai.config import IVISConfig
+from thunai.ivis_dictionary import IVISRuleCatalog, ResolvedRuleResponse
 from thunai.intelligence.base import BaseSLMProvider, SLMProvider
 from thunai.interaction.base import TTSProvider
 from thunai.interaction import VoiceEngine
@@ -171,6 +172,26 @@ class IVISEngine:
         self._stress_history: list[float] = []  # per-frame samples for avg/peak
         self._recent_interventions: deque[float] = deque()  # timestamps of recent speaks
 
+        self._dictionary_mode = getattr(config, "dictionary_mode", "mode_2") if config else "mode_2"
+        self._rule_catalog: IVISRuleCatalog | None = None
+        self._last_response_source: str | None = None
+        self._last_rule_id: str | None = None
+        self._last_response_mode: str | None = None
+
+        if config and getattr(config, "dictionary_enabled", False):
+            try:
+                self._rule_catalog = IVISRuleCatalog.load(config.dictionary_path)
+            except FileNotFoundError:
+                logger.warning(
+                    "IVIS dictionary file not found at %s; falling back to SLM copy.",
+                    config.dictionary_path,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to load IVIS dictionary from %s; falling back to SLM copy.",
+                    config.dictionary_path,
+                )
+
         # Doc reference state
         if self.cfg:
             self.cooldown_s = self.cfg.get("cooldown_s", self.cfg.get("cooldown", 0))
@@ -319,22 +340,66 @@ class IVISEngine:
             self._recent_interventions.popleft()
         return len(self._recent_interventions) < self._config.max_interventions_per_minute
 
+    def _resolve_dictionary_response(
+        self, events: list[DriveEvent]
+    ) -> tuple[DriveEvent, ResolvedRuleResponse] | None:
+        if not self._rule_catalog:
+            return None
+
+        for event in sorted(events, key=lambda item: item.stress_delta, reverse=True):
+            resolved = self._rule_catalog.resolve_runtime_event(
+                event.event_type,
+                self._dictionary_mode,
+            )
+            if resolved:
+                return event, resolved
+        return None
+
     def _intervene(self, events: list[DriveEvent], *, bypass_rate_limit: bool = False) -> None:
         if not events:
             return
 
-        # Build a concise prompt for the SLM
         top_event = max(events, key=lambda e: e.stress_delta)
-        prompt = (
-            f"You are a calm driving coach. The driver's car has detected: {top_event.description}. "
-            f"Provide a brief, calm, actionable instruction in one sentence."
-        )
+        resolved_dictionary = self._resolve_dictionary_response(events)
+        if resolved_dictionary is not None:
+            matched_event, response = resolved_dictionary
+            response_text = response.text
+            response_source = "dictionary"
+            event_for_logging = matched_event.event_type
+            self._last_rule_id = response.rule_id
+            self._last_response_mode = response.mode
+        else:
+            prompt = (
+                f"You are a calm driving coach. The driver's car has detected: {top_event.description}. "
+                f"Provide a brief, calm, actionable instruction in one sentence."
+            )
+            response = self._slm.generate(prompt, max_tokens=64, temperature=0.2)
+            response_text = response.text
+            response_source = "slm"
+            event_for_logging = top_event.event_type
+            self._last_rule_id = None
+            self._last_response_mode = None
 
-        response = self._slm.generate(prompt, max_tokens=64, temperature=0.2)
-        self._voice.speak(response.text)
+        self._last_response_source = response_source
+        self._voice.speak(response_text)
         if not bypass_rate_limit:
             self._recent_interventions.append(time.monotonic())
-        logger.info("IVIS intervention [%s]: %s", top_event.event_type, response.text)
+        if self._last_rule_id:
+            logger.info(
+                "IVIS intervention [%s] via %s (%s/%s): %s",
+                event_for_logging,
+                response_source,
+                self._last_rule_id,
+                self._last_response_mode,
+                response_text,
+            )
+        else:
+            logger.info(
+                "IVIS intervention [%s] via %s: %s",
+                event_for_logging,
+                response_source,
+                response_text,
+            )
 
     # ── Developer reference methods (v1) ──────────────────────────────────
     def start_session(self, session: DriveSession) -> None:

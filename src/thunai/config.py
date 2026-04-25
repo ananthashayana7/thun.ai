@@ -151,6 +151,9 @@ class VoiceConfig(BaseModel):
 class IVISConfig(BaseModel):
     stress_threshold: float = 0.60
     max_interventions_per_minute: int = 4
+    dictionary_enabled: bool = True
+    dictionary_path: str = "config/ivis_dictionary.json"
+    dictionary_mode: str = "mode_2"
 
 
 class TherapistConfig(BaseModel):

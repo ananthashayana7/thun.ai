@@ -108,6 +108,9 @@ voice:
 ivis:
   stress_threshold: 0.60          # 0–1 scale; interventions fire above this
   max_interventions_per_minute: 4  # Prevent cognitive overload
+  dictionary_enabled: true
+  dictionary_path: config/ivis_dictionary.json
+  dictionary_mode: mode_2
 
 therapist:
   # Therapist is active whenever user requests it and vehicle is stationary
